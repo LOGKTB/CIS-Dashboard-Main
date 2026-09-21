@@ -116,6 +116,22 @@ def _num(value):
     return None if (np.isnan(out) or np.isinf(out)) else out
 
 
+def _f(value, spec=".2f", dash="N/A"):
+    """ISSUE 01 (hardening): format ตัวเลขโดยไม่ระเบิดเมื่อค่าเป็น None
+
+    ต่างจาก safe(value, default) ของ v3.1 ตรงที่ไม่เคยแทน None ด้วยตัวเลข
+    แต่คืนข้อความ "N/A" แทน จึงไม่มีทางเกิด
+    TypeError: unsupported format string passed to NoneType.__format__
+    ไม่ว่าคีย์ใดจาก backend จะหล่นหายระหว่างทางก็ตาม
+    """
+    if value is None:
+        return dash
+    try:
+        return format(float(value), spec)
+    except (TypeError, ValueError):
+        return dash
+
+
 def _missing_list(raw):
     """backend ส่ง missing_fields มาเป็น JSON string (SQLite compatibility)"""
     if isinstance(raw, (list, tuple)):
@@ -284,6 +300,18 @@ def render(ctx):
     rr_score = _num(info.get("rr_score")) or 0.0
     rr_status = str(info.get("rr_status", "COMPUTED"))
     rr_status_reason = str(info.get("rr_status_reason", ""))
+    # ISSUE 03 (hardening): ห้ามเชื่อธงสถานะเพียงอย่างเดียว เพราะถ้าคีย์ rr_status
+    # หล่นหายระหว่างทาง (backend เวอร์ชันเก่า หรือ schema ของ cis_database.db
+    # ไม่มีคอลัมน์นี้) ค่า default "COMPUTED" จะพาโค้ดไป format rr_ratio ที่เป็น
+    # None แล้วเกิด TypeError ทั้งหน้าจอ — ให้ "ค่าที่จะแสดง" เป็นคนตัดสินแทน
+    rr_computable = (rr_status != "NOT_COMPUTABLE") and (rr_ratio is not None)
+    if not rr_computable and not rr_status_reason:
+        rr_status_reason = (
+            "ไม่พบค่าอัตราส่วนจาก backend (ตรวจสอบว่าใช้ entry_timing.py v2.0 "
+            "และตาราง cis_database.db มีคอลัมน์ rr_status / rr_status_reason)"
+            if rr_status != "NOT_COMPUTABLE"
+            else "ไม่สามารถนิยามอัตราส่วนผลตอบแทนต่อความเสี่ยงได้"
+        )
     downside_pct = _num(info.get("downside_pct"))
     upside_pct = _num(info.get("upside_pct"))
 
@@ -305,12 +333,12 @@ def render(ctx):
         return f"+{share:.1f} pts"
 
     # ISSUE 03: ข้อความของแถว Risk/Reward แยก 2 กรณีชัดเจน
-    if rr_status == "NOT_COMPUTABLE":
-        rr_sub_text = f"คำนวณไม่ได้ — {rr_status_reason}" if rr_status_reason else "คำนวณอัตราส่วนไม่ได้"
+    if not rr_computable:
+        rr_sub_text = f"คำนวณไม่ได้ — {rr_status_reason}"
     elif k_rr_ok:
-        rr_sub_text = f"RR {rr_ratio:.2f} : 1 ผ่านเกณฑ์ขั้นต่ำ"
+        rr_sub_text = f"RR {_f(rr_ratio)} : 1 ผ่านเกณฑ์ขั้นต่ำ"
     else:
-        rr_sub_text = f"RR {rr_ratio:.2f} : 1 ต่ำกว่าเกณฑ์ขั้นต่ำ"
+        rr_sub_text = f"RR {_f(rr_ratio)} : 1 ต่ำกว่าเกณฑ์ขั้นต่ำ"
 
     # 7 items total: 3 Trend + 3 Momentum + 1 Risk/Reward, matching the
     # 40/30/30 pillar weighting used by the scoring backend.
@@ -328,14 +356,14 @@ def render(ctx):
          "MACD อยู่ในโซนบวก" if k18_ok else ("MACD อยู่ในโซนลบ" if k18_av else "ไม่มีข้อมูล MACD"),
          pillar_pts_label(k18_ok, k18_av, mom_criteria_count, 30.0)),
         (k19_ok, k19_av, "Trend Strength (ADX)",
-         (f"ADX {adx_val:.1f} (มีแรงเหวี่ยงดี)" if k19_ok else f"ADX {adx_val:.1f} (ต่ำกว่าเกณฑ์)") if k19_av else "ไม่มีข้อมูล ADX",
+         (f"ADX {_f(adx_val, '.1f')} (มีแรงเหวี่ยงดี)" if k19_ok else f"ADX {_f(adx_val, '.1f')} (ต่ำกว่าเกณฑ์)") if k19_av else "ไม่มีข้อมูล ADX",
          pillar_pts_label(k19_ok, k19_av, mom_criteria_count, 30.0)),
         (k20_ok, k20_av, "Volume Confirmation",
          ("วอลุ่มล่าสุดสูงกว่าค่าเฉลี่ย 20 วันก่อนหน้า" if k20_ok else "วอลุ่มเบาบางกว่าค่าเฉลี่ย 20 วันก่อนหน้า") if k20_av else "ไม่มีข้อมูลวอลุ่มเพียงพอ",
          pillar_pts_label(k20_ok, k20_av, mom_criteria_count, 30.0)),
         (k_rr_ok, k_rr_av, "Risk / Reward",
          rr_sub_text,
-         f"+{rr_score:.1f} pts" if k_rr_ok else "0.0 pts"),
+         f"+{_f(rr_score, '.1f')} pts" if k_rr_ok else "0.0 pts"),
     ]
 
     bullish_count = sum(1 for ok, av, *_ in checklist if ok and av)
@@ -535,26 +563,26 @@ def render(ctx):
                             align-items:center;flex-wrap:wrap;row-gap:4px;">
                     <span style="font-size:12px;font-weight:800;color:{TEXT_WHITE};">PRICE SETUP</span>
                     <span style="background:rgba(56,189,248,.15);color:{ACCENT};font-size:9.5px;font-weight:800;
-                                 padding:2px 6px;border-radius:4px;">Current {c_p:.2f}</span>
+                                 padding:2px 6px;border-radius:4px;">Current {_f(c_p)}</span>
                 </div>
                 <div style="margin-top:8px;">
                     <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid {BORDER_SOFT};font-size:11px;">
-                        <span style="color:{TEXT_MUTED};">Current Price</span><b style="color:{TEXT_WHITE};">{c_p:.2f} THB</b>
+                        <span style="color:{TEXT_MUTED};">Current Price</span><b style="color:{TEXT_WHITE};">{_f(c_p)} THB</b>
                     </div>
                     <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid {BORDER_SOFT};font-size:11px;">
-                        <span style="color:{GREEN};">Preferred Entry</span><b style="color:{GREEN};">{s1:.2f} -- {pp:.2f}</b>
+                        <span style="color:{GREEN};">Preferred Entry</span><b style="color:{GREEN};">{_f(s1)} -- {_f(pp)}</b>
                     </div>
                     <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid {BORDER_SOFT};font-size:11px;">
-                        <span style="color:{AMBER};">Watch Zone</span><b style="color:{AMBER};">{pp:.2f} -- {r1:.2f}</b>
+                        <span style="color:{AMBER};">Watch Zone</span><b style="color:{AMBER};">{_f(pp)} -- {_f(r1)}</b>
                     </div>
                     <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid {BORDER_SOFT};font-size:11px;">
-                        <span style="color:{RED};">Stop Loss</span><b style="color:{RED};">&lt; {s2:.2f}</b>
+                        <span style="color:{RED};">Stop Loss</span><b style="color:{RED};">&lt; {_f(s2)}</b>
                     </div>
                     <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid {BORDER_SOFT};font-size:11px;">
-                        <span style="color:{TEXT_WHITE};">Target 1</span><b style="color:{TEXT_WHITE};">{r1:.2f}</b>
+                        <span style="color:{TEXT_WHITE};">Target 1</span><b style="color:{TEXT_WHITE};">{_f(r1)}</b>
                     </div>
                     <div style="display:flex;justify-content:space-between;padding:5px 0;font-size:11px;">
-                        <span style="color:{TEXT_WHITE};">Target 2</span><b style="color:{TEXT_WHITE};">{r2:.2f}</b>
+                        <span style="color:{TEXT_WHITE};">Target 2</span><b style="color:{TEXT_WHITE};">{_f(r2)}</b>
                     </div>
                 </div>
             </div>
@@ -585,13 +613,13 @@ def render(ctx):
 
     with b_c1:
         # ISSUE 03: NOT_COMPUTABLE ต้องไม่ถูกแสดงเป็น "0.00 : 1" ปนกับค่าที่คำนวณได้จริง
-        if rr_status == "NOT_COMPUTABLE":
+        if not rr_computable:
             rr_color = GRAY
             rr_headline = "N/A"
-            rr_note = rr_status_reason or "ไม่สามารถนิยามอัตราส่วนผลตอบแทนต่อความเสี่ยงได้"
+            rr_note = rr_status_reason
         else:
             rr_color = GREEN if rr_ratio >= 2.0 else (AMBER if rr_ratio >= 1.5 else RED)
-            rr_headline = f"{rr_ratio:.2f} : 1"
+            rr_headline = f"{_f(rr_ratio)} : 1"
             if rr_ratio >= 2.0:
                 rr_note = "อัพไซด์สูงกว่าระยะความเสี่ยงที่นิยามไว้อย่างมีนัยสำคัญ"
             elif rr_ratio >= 1.0:

@@ -3,269 +3,332 @@
 calculate_modules/entry_timing.py
 --------------------------------------------------------------------
 Institutional Quantitative Framework (IKB v2.0) - Audit Response Build
-
-ยึดโครงสร้างไฟล์เดิม (v1.3) ทุกประการ: ลำดับฟังก์ชัน ชื่อฟังก์ชัน
-`_empty_result()` / `classify_signal()` / `compute_price_levels()` /
-`calculate_timing_module()` และชื่อคีย์ผลลัพธ์เดิมถูกรักษาไว้ครบ
-การเปลี่ยนแปลงคือการแก้ตรรกะภายใน และ "เพิ่ม" คีย์ใหม่เท่านั้น
-ไม่มีการลบคีย์เดิมออก โมดูลอื่นที่อ่านผลลัพธ์อยู่จึงไม่พัง
-
-Changelog vs v1.3 (ตอบ Feedback_Action_Module_3 ครบ 5 ประเด็น + 1 ที่พบเพิ่ม):
-
-- ISSUE 01: `_empty_result()` ไม่คืน 50.0 / NEUTRAL อีกต่อไป ทุกฟิลด์เชิงตัวเลข
-  คืน None และเพิ่ม 'data_status' = 'INSUFFICIENT_DATA' ให้ UI แสดง
-  "ข้อมูลไม่เพียงพอ" แทนหน้าปัดสีฟ้า NEUTRAL
-  แยกการตรวจเป็น Hard Gate (`_check_data_gate`) และ Soft Gate
-  (`min_data_completeness`) เพื่อไม่ให้ขัดกับ ISSUE 02
-
-- ISSUE 02: ตัวหารของเสา Trend / Momentum ถูก "ตรึง" ด้วย
-  cfg.trend_criteria_count / cfg.momentum_criteria_count (ค่าเริ่มต้น 3/3)
-  ตัวชี้วัดที่หาย = 0 คะแนน ไม่ลดตัวหารอีกต่อไป
-  เพิ่ม `_resolve_column()` รองรับชื่อคอลัมน์หลายแบบ (ADX / ADX14 / ADX_14 ...)
+ 
+Changelog vs v1.3 (ตอบ Feedback_Action_Module_3 ทั้ง 5 ประเด็น):
+ 
+- ISSUE 01: `_empty_result()` ไม่คืนค่า 50.0/NEUTRAL อีกต่อไป ทุกฟิลด์เชิง
+  ตัวเลขคืน None และเพิ่ม 'data_status' = 'INSUFFICIENT_DATA' ให้ UI
+  แสดง "ข้อมูลไม่เพียงพอ" แทนหน้าปัดสีฟ้า NEUTRAL
+  เพิ่ม Hard Gate (`_check_data_gate`) แยกจาก Soft Gate ของ Issue 02
+ 
+- ISSUE 02: ตัวหารของเสา Trend และ Momentum ถูกตรึงด้วย
+  `cfg.trend_criteria_count` / `cfg.momentum_criteria_count` (ค่าเริ่มต้น 3/3)
+  ตัวชี้วัดที่หาย = 0 คะแนน ไม่ลดตัวหาร
+  เพิ่ม `_resolve_column()` รองรับชื่อคอลัมน์หลายแบบ (ADX / ADX14 / ADX_14)
   เพราะสาเหตุรากเหง้าจริงของอาการ 50 -> 55 คือชื่อคอลัมน์ไม่ตรง
-
+ 
 - ISSUE 03: `compute_risk_reward()` แยก 2 กรณีออกจากกันชัดเจน
   คำนวณไม่ได้ -> rr_ratio = None, rr_status = 'NOT_COMPUTABLE'
-  คำนวณได้แต่ต่ำ -> rr_ratio = ค่าจริง (เช่น 0.19), rr_status = 'COMPUTED', score = 0
-
+  คำนวณได้แต่ต่ำ -> rr_ratio = 0.19 (ค่าจริง), rr_status = 'COMPUTED', score = 0
+ 
 - ISSUE 04: `compute_volume_context()` ใช้แท่ง -21 ถึง -2 (`iloc[-21:-1]`)
   เป็นฐานค่าเฉลี่ย แยกแท่งปัจจุบัน (-1) ออกจากอดีตอย่างเด็ดขาด
-
+  และ *ไม่* ใช้คอลัมน์ Volume_Avg20 ที่ pre-compute มา เว้นแต่สั่งชัดเจน
+  เพราะคอลัมน์นั้นเป็น rolling(20) ที่รวมแท่งปัจจุบันอยู่แล้ว
+ 
 - ISSUE 05: ย้ายค่าเชิง Business Judgment ทั้งหมดเข้า `TimingConfig`
-  (frozen dataclass) รองรับ from_dict / from_json / from_env
-  ฟังก์ชันหลักรับ `config=` โดยยังเรียกแบบเดิม (ไม่ส่ง config) ได้ตามปกติ
-
-- ISSUE 06 (พบเพิ่มระหว่างแก้): ป้องกันตัวหาร RR เล็กผิดปกติด้วย
-  `min_downside_pct` (ค่าเริ่มต้น 1.0%) กรณีราคาเกาะแนวรับจนระยะ stop
-  แคบผิดธรรมชาติ (เคส KCE = 90.5 : 1) จะคืน NOT_COMPUTABLE แทนการให้คะแนนเต็ม
-
-- SQLITE COMPATIBILITY: 'missing_fields' และ 'config_snapshot' ถูกแปลงเป็น
-  JSON string ก่อนคืนค่า เพื่อไม่ให้เกิด sqlite3.ProgrammingError
-  ตอนบันทึกลง cis_summary_scores
+  (dataclass) รองรับ from_dict / from_json / from_env
+  ฟังก์ชันหลักทุกตัวรับ `config=` เพื่อพร้อมทำ Parameter Optimization / Backtest
 """
-
+ 
 from __future__ import annotations
-
+ 
 import json
+import math
 import os
-from dataclasses import dataclass, asdict, fields
-
+from dataclasses import dataclass, field, replace, asdict
+from typing import Optional, Sequence, Tuple
+ 
 import numpy as np
 import pandas as pd
-
-from calculate_modules.common import clean_float
-
-ALGO_VERSION = "entry_timing/v2.0"
-MIN_BARS_FOR_1Y_TREND = 200
-
-
+ 
+try:  # ให้ไฟล์นี้ import ได้ทั้งในโปรเจกต์จริงและตอนรัน unit test เดี่ยว ๆ
+    from calculate_modules.common import clean_float  # noqa: F401
+except ImportError:  # pragma: no cover
+    def clean_float(value, default=0.0):
+        try:
+            f = float(value)
+            return default if (math.isnan(f) or math.isinf(f)) else f
+        except (TypeError, ValueError):
+            return default
+ 
+ 
 # =====================================================================
 # ISSUE 05: Parameterization layer
 # =====================================================================
 @dataclass(frozen=True)
 class TimingConfig:
     """ศูนย์รวมค่าเชิง Business Judgment ของ Module 3
-
-    ค่าเริ่มต้นทั้งหมด = ค่าที่ production v1.3 ใช้อยู่เดิม (backward compatible)
-    ทุกค่า override ได้จาก dict / JSON / environment variable เพื่อให้ทำ
-    grid search + walk-forward backtest บน SET ได้โดยไม่ต้องแก้โค้ด
+ 
+    ค่าเริ่มต้น = ค่าที่ระบบ production ใช้อยู่เดิม (backward compatible)
+    ทุกค่าถูก override ได้จาก dict / JSON / environment variable
+    เพื่อให้ทำ grid search + walk-forward backtest บน SET ได้โดยไม่แก้โค้ด
     """
-
+ 
     # ---- น้ำหนักเสา (รวม 100) ----
     trend_weight: float = 40.0
     momentum_weight: float = 30.0
     rr_weight: float = 30.0
-
-    # ---- ISSUE 02: ตัวหารคงที่ ห้ามลดอัตโนมัติ ----
+ 
+    # ---- ISSUE 02: ตัวหารตรึง ห้ามลดอัตโนมัติ ----
     trend_criteria_count: int = 3
     momentum_criteria_count: int = 3
-    total_criteria_count: int = 7
-
+ 
     # ---- เกณฑ์ตัวชี้วัด ----
-    adx_threshold: float = 25.0
-    ma200_window: int = 200
-    volume_lookback: int = 20
-    resistance_window: int = 60
-    resistance_window_long: int = 120
-
-    # ---- ขั้นบันได Risk / Reward ----
-    rr_tier_high: float = 2.0
-    rr_tier_mid: float = 1.5
-    rr_tier_low: float = 1.0
-
-    # ---- เกณฑ์แปลผลคะแนนรวม ----
-    score_bullish: float = 70.0
-    score_neutral: float = 40.0
-
-    # ---- ISSUE 01: ประตูคุณภาพข้อมูล ----
-    min_bars_hard_gate: int = 20
-    min_data_completeness: float = 0.5
-
-    # ---- ISSUE 06: ป้องกันตัวหาร RR เล็กผิดปกติ (ตั้ง 0.0 = ปิดการป้องกัน) ----
+    adx_trend_threshold: float = 25.0      # เดิม hardcode 25
+    macd_bull_threshold: float = 0.0
+    volume_ratio_threshold: float = 1.0    # vol_last / vol_avg >= 1.0
+ 
+    # ---- ISSUE 04: ฐานค่าเฉลี่ยวอลุ่ม ----
+    volume_lookback: int = 20              # จำนวนแท่งย้อนหลังที่ใช้เป็นฐาน
+    volume_exclude_current_bar: bool = True
+    use_precomputed_volume_avg: bool = False
+    volume_avg_column_candidates: Tuple[str, ...] = ("Volume_Avg20", "Volume_Avg_20")
+ 
+    # ---- ISSUE 03/05: บันได Risk/Reward (ratio, points) เรียงจากสูงไปต่ำ ----
+    rr_tiers: Tuple[Tuple[float, float], ...] = ((2.0, 30.0), (1.5, 20.0), (1.0, 10.0))
+ 
+    # ---- ประเด็นที่พบเพิ่ม: กันตัวหาร RR เล็กผิดปกติ ----
+    # หุ้นที่ไหลลงไปนั่งที่ Low 120 วันพอดี จะมี downside เพียง 0.3-0.5%
+    # ทำให้ RR พุ่งเป็น 90:1 และได้ 30/30 คะแนนเต็ม ทั้งที่เป็นหุ้นขาลง
+    # ตั้ง 0.0 เพื่อปิด guard นี้ (จำลองพฤติกรรมเดิม)
     min_downside_pct: float = 1.0
-
+ 
+    # ---- ISSUE 05: เกณฑ์แบ่งสถานะ ----
+    bullish_threshold: float = 70.0
+    neutral_threshold: float = 40.0
+ 
+    # ---- ISSUE 01: Hard Gate คุณภาพข้อมูล ----
+    min_bars_required: int = 20            # ต่ำกว่านี้ = ข้อมูลไม่เพียงพอ
+    min_data_completeness: float = 0.50    # ตัวชี้วัดพร้อมใช้ < 50% = N/A
+ 
+    # ---- ระดับราคา ----
+    resistance_window_short: int = 60
+    resistance_window_long: int = 120
+    ma_long_period: int = 200
+ 
+    # ---- ชื่อคอลัมน์ที่ยอมรับ (ISSUE 02: กันชื่อไม่ตรงแบบ ADX vs ADX14) ----
+    close_columns: Tuple[str, ...] = ("close", "Close")
+    high_columns: Tuple[str, ...] = ("high", "High")
+    low_columns: Tuple[str, ...] = ("low", "Low")
+    volume_columns: Tuple[str, ...] = ("volume", "Volume", "vol", "Vol")
+    ema20_columns: Tuple[str, ...] = ("EMA20", "ema20", "EMA_20")
+    ema50_columns: Tuple[str, ...] = ("EMA50", "ema50", "EMA_50")
+    ma200_columns: Tuple[str, ...] = ("MA200", "ma200", "SMA200", "MA_200")
+    rsi_columns: Tuple[str, ...] = ("RSI14", "rsi14", "RSI_14", "RSI")
+    macd_columns: Tuple[str, ...] = ("MACD", "macd")
+    adx_columns: Tuple[str, ...] = ("ADX", "ADX14", "adx14", "ADX_14", "adx")
+ 
+    # ------------------------------------------------------------------
+    def __post_init__(self):
+        total = self.trend_weight + self.momentum_weight + self.rr_weight
+        if abs(total - 100.0) > 1e-6:
+            raise ValueError(f"น้ำหนักเสารวมต้องเท่ากับ 100 (ได้ {total})")
+        if self.trend_criteria_count < 1 or self.momentum_criteria_count < 1:
+            raise ValueError("ตัวหารของเสาต้องเป็นจำนวนเต็มบวก")
+        if self.bullish_threshold <= self.neutral_threshold:
+            raise ValueError("bullish_threshold ต้องมากกว่า neutral_threshold")
+        if self.rr_tiers:
+            ratios = [t[0] for t in self.rr_tiers]
+            if ratios != sorted(ratios, reverse=True):
+                raise ValueError("rr_tiers ต้องเรียงอัตราส่วนจากมากไปน้อย")
+            if max(t[1] for t in self.rr_tiers) > self.rr_weight + 1e-9:
+                raise ValueError("คะแนนสูงสุดใน rr_tiers เกินน้ำหนักเสา RR")
+        if self.volume_lookback < 2:
+            raise ValueError("volume_lookback ต้อง >= 2")
+ 
+    # ---- โรงงานสร้าง config จากแหล่งภายนอก ----
     @classmethod
-    def from_dict(cls, overrides):
+    def from_dict(cls, overrides: Optional[dict]) -> "TimingConfig":
         if not overrides:
             return cls()
-        valid = {f.name: f.type for f in fields(cls)}
+        valid = {f for f in cls.__dataclass_fields__}
+        unknown = set(overrides) - valid
+        if unknown:
+            raise KeyError(f"พารามิเตอร์ไม่รู้จัก: {sorted(unknown)}")
         clean = {}
-        for key, value in overrides.items():
-            if key not in valid:
-                continue
-            clean[key] = int(value) if valid[key] in (int, "int") else float(value)
+        for k, v in overrides.items():
+            if k == "rr_tiers" and v is not None:
+                v = tuple((float(a), float(b)) for a, b in v)
+            elif isinstance(v, list):
+                v = tuple(v)
+            clean[k] = v
         return cls(**clean)
-
+ 
     @classmethod
-    def from_json(cls, path_or_text):
-        if path_or_text is None:
-            return cls()
-        if os.path.exists(str(path_or_text)):
-            with open(path_or_text, "r", encoding="utf-8") as fh:
-                return cls.from_dict(json.load(fh))
-        return cls.from_dict(json.loads(path_or_text))
-
+    def from_json(cls, path: str) -> "TimingConfig":
+        with open(path, "r", encoding="utf-8") as fh:
+            return cls.from_dict(json.load(fh))
+ 
     @classmethod
-    def from_env(cls, prefix="IKB_TIMING_"):
+    def from_env(cls, prefix: str = "TIMING_") -> "TimingConfig":
+        """อ่าน override จาก env เช่น TIMING_ADX_TREND_THRESHOLD=20"""
         overrides = {}
-        for f in fields(cls):
-            raw = os.getenv(f"{prefix}{f.name.upper()}")
-            if raw is not None:
-                overrides[f.name] = raw
+        for name, f in cls.__dataclass_fields__.items():
+            env_key = prefix + name.upper()
+            if env_key not in os.environ:
+                continue
+            raw = os.environ[env_key]
+            if f.type in ("float", float):
+                overrides[name] = float(raw)
+            elif f.type in ("int", int):
+                overrides[name] = int(raw)
+            elif f.type in ("bool", bool):
+                overrides[name] = raw.strip().lower() in ("1", "true", "yes", "y")
+            else:
+                overrides[name] = json.loads(raw)
         return cls.from_dict(overrides)
-
-    def as_json(self):
-        return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True)
-
-
+ 
+    def tuned(self, **kwargs) -> "TimingConfig":
+        """สร้าง config ใหม่จากของเดิม ใช้ตอน grid search"""
+        return replace(self, **kwargs)
+ 
+    def as_dict(self) -> dict:
+        return asdict(self)
+ 
+ 
 DEFAULT_CONFIG = TimingConfig()
-
-
+ 
+# ค่าคงที่เดิมที่โมดูลอื่นอาจ import อยู่ คงไว้เพื่อ backward compatibility
+MIN_BARS_FOR_1Y_TREND = DEFAULT_CONFIG.ma_long_period
+ 
+ 
 # =====================================================================
-# ISSUE 02 (root cause): column resolution
+# Helper: อ่านค่าแบบไม่ยัดค่า default ปลอม
 # =====================================================================
-COLUMN_ALIASES = {
-    'close': ('close', 'Close', 'CLOSE', 'close_price'),
-    'high': ('high', 'High', 'HIGH'),
-    'low': ('low', 'Low', 'LOW'),
-    'volume': ('volume', 'Volume', 'vol', 'Vol', 'VOLUME'),
-    'ema20': ('EMA20', 'ema20', 'EMA_20', 'ema_20'),
-    'ema50': ('EMA50', 'ema50', 'EMA_50', 'ema_50'),
-    'ma200': ('MA200', 'ma200', 'MA_200', 'SMA200', 'sma200'),
-    'rsi': ('RSI14', 'RSI', 'rsi14', 'rsi', 'RSI_14'),
-    'macd': ('MACD', 'macd', 'MACD_line', 'macd_line'),
-    'adx': ('ADX', 'ADX14', 'ADX_14', 'adx', 'adx14'),
-}
-
-
-def _resolve_column(df, key):
-    """คืนชื่อคอลัมน์จริงที่พบใน DataFrame ตาม alias ที่รองรับ (ไม่พบ = None)
-
-    สาเหตุรากเหง้าจริงของอาการคะแนนกระโดด 50 -> 55 คือคอลัมน์ ADX ในชุดข้อมูล
-    ใช้ชื่อ 'ADX14' แต่โค้ดเดิมอ่าน 'ADX' ตรง ๆ จึงถือว่า "ไม่มีข้อมูล" ทุกครั้ง
-    แล้วไปลดตัวหารตาม ISSUE 02 ซ้ำอีกชั้นหนึ่ง
-    """
-    for name in COLUMN_ALIASES.get(key, ()):
+def _to_float(value) -> Optional[float]:
+    """คืน None ถ้าค่าใช้ไม่ได้ (แทนที่จะแอบแทนด้วย 50.0 / 20.0 / 10.0)"""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+ 
+ 
+def _resolve_column(df: pd.DataFrame, candidates: Sequence[str]) -> Optional[str]:
+    """หาคอลัมน์ตัวแรกที่มีอยู่จริง (ISSUE 02: กันเคส ADX vs ADX14)"""
+    if df is None:
+        return None
+    for name in candidates:
         if name in df.columns:
             return name
     return None
-
-
-def _latest(latest_row, col):
+ 
+ 
+def _latest_value(df: pd.DataFrame, candidates: Sequence[str]) -> Tuple[Optional[float], Optional[str]]:
+    col = _resolve_column(df, candidates)
     if col is None:
-        return None
-    value = latest_row.get(col)
-    return None if not pd.notna(value) else value
-
-
-def _check_data_gate(df_price_ticker, config=None):
-    """ISSUE 01 Hard Gate: เงื่อนไขที่ทำให้ 'ประเมินไม่ได้เลย' (ไม่ใช่แค่ตัวชี้วัดขาด)"""
-    cfg = config or DEFAULT_CONFIG
-
-    if df_price_ticker is None:
-        return False, "ไม่ได้รับชุดข้อมูลราคา"
-    if not isinstance(df_price_ticker, pd.DataFrame) or df_price_ticker.empty:
-        return False, "ชุดข้อมูลราคาว่างเปล่า"
-
-    close_col = _resolve_column(df_price_ticker, 'close')
-    if close_col is None:
-        return False, "ไม่พบคอลัมน์ราคาปิดในชุดข้อมูล"
-    if len(df_price_ticker) < cfg.min_bars_hard_gate:
-        return False, (f"มีข้อมูลเพียง {len(df_price_ticker)} แท่ง "
-                       f"(ต้องการอย่างน้อย {cfg.min_bars_hard_gate} แท่ง)")
-
-    last_close = df_price_ticker.iloc[-1].get(close_col)
-    if not pd.notna(last_close) or float(last_close) <= 0:
-        return False, "ราคาปิดล่าสุดไม่สมบูรณ์หรือไม่เป็นบวก"
-
-    return True, ""
-
-
-def _empty_result(reason="ข้อมูลไม่เพียงพอสำหรับการประเมินเชิงลึก",
-                  missing_fields=None, config=None):
-    """ISSUE 01: ไม่คืนค่า 50.0 / NEUTRAL อีกต่อไป
-
-    ฟิลด์เชิงตัวเลขทั้งหมดคืน None เพื่อบังคับให้ชั้น UI ตัดสินใจแสดงผล
-    "ข้อมูลไม่เพียงพอ" อย่างชัดเจน — ไม่มีข้อมูล ไม่เท่ากับ ปานกลาง
+        return None, None
+    return _to_float(df[col].iloc[-1]), col
+ 
+ 
+def _round(value: Optional[float], digits: int = 2) -> Optional[float]:
+    return None if value is None else round(float(value), digits)
+ 
+ 
+# =====================================================================
+# ISSUE 01: ไม่มีข้อมูล = "ไม่ประเมิน" ไม่ใช่ "ประเมินแล้วได้กลาง ๆ"
+# =====================================================================
+NO_DATA_STATUS = "INSUFFICIENT_DATA"
+NO_DATA_COLOR = "#64748B"          # เทา ไม่ใช่ฟ้า NEUTRAL (#38BDF8)
+NO_DATA_LABEL_TH = "ข้อมูลไม่เพียงพอ"
+ 
+_NUMERIC_OUTPUT_KEYS = (
+    "timing_score", "rsi", "macd", "adx", "ema20", "ema50", "ma200",
+    "resistance_60d", "support_60d", "pivot_point", "resistance_2", "support_2",
+    "rr_ratio", "trend_score", "mom_score", "rr_score",
+    "upside_pct", "downside_pct", "volume_ratio", "volume_avg", "volume_last",
+)
+ 
+_FLAG_OUTPUT_KEYS = (
+    "k15_ok", "k16_ok", "k17_ok", "k18_ok", "k19_ok", "k20_ok", "k_rr_ok",
+    "k15_available", "k16_available", "k17_available",
+    "k18_available", "k19_available", "k20_available", "k_rr_available",
+)
+ 
+ 
+def _empty_result(reason: str = "ไม่พบข้อมูลราคาสำหรับหลักทรัพย์นี้",
+                  config: Optional[TimingConfig] = None) -> dict:
+    """ผลลัพธ์กรณีข้อมูลไม่พอ
+ 
+    ห้ามคืน timing_score = 50.0 โดยเด็ดขาด เพราะ 50 เป็น "ผลการประเมิน"
+    ที่แปลว่า NEUTRAL ส่วนกรณีนี้คือ "ไม่ได้ประเมิน" ซึ่งคนละความหมาย
+    ทุกฟิลด์ตัวเลขคืน None เพื่อบังคับให้ฝั่ง UI ต้องจัดการเคสนี้
     """
-    cfg = config or DEFAULT_CONFIG
-    sig = classify_signal(None, config=cfg)
-    return {
-        'timing_score': None, 'rsi': None, 'macd': None, 'adx': None,
-        'ema20': None, 'ema50': None, 'ma200': None, 'trend_signal': sig['signal_legacy'],
-        'resistance_60d': None, 'support_60d': None, 'pivot_point': None,
-        'resistance_2': None, 'support_2': None, 'overall_signal': sig['overall_signal'],
-        'status_label': sig['status_label'], 'status_color': sig['status_color'],
-        'action_th': sig['action_th'], 'rr_ratio': None,
-        'trend_score': None, 'mom_score': None, 'rr_score': None,
-        'upside_pct': None, 'downside_pct': None, 'readiness': sig['readiness'],
-        'summary_text': reason or sig['summary_text'],
-        'k15_ok': False, 'k16_ok': False, 'k17_ok': False,
-        'k18_ok': False, 'k19_ok': False, 'k20_ok': False, 'k_rr_ok': False,
-        'k15_available': False, 'k16_available': False, 'k17_available': False,
-        'k18_available': False, 'k19_available': False, 'k20_available': False,
-        'k_rr_available': False,
-        'trend_available_count': 0, 'mom_available_count': 0,
-        'trend_criteria_count': cfg.trend_criteria_count,
-        'mom_criteria_count': cfg.momentum_criteria_count,
-        'total_criteria_count': cfg.total_criteria_count,
-        'rr_status': 'NOT_COMPUTABLE', 'rr_status_reason': 'ยังไม่ได้ประเมิน',
-        'vol_last': None, 'vol_avg20': None,
-        'data_completeness': 0.0,
-        'data_status': 'INSUFFICIENT_DATA',
-        'data_status_reason': reason,
-        'is_evaluated': False,
-        'missing_fields': json.dumps(list(missing_fields or []), ensure_ascii=False),
-        'algo_version': ALGO_VERSION,
-        'config_snapshot': cfg.as_json(),
-    }
-
-
-def classify_signal(total_score, config=None):
-    """Single source of truth ของการแปลคะแนนเป็นสถานะ (UI เรียกใช้ฟังก์ชันนี้)
-
-    ISSUE 01: total_score = None คือสถานะ "ยังไม่ได้ประเมิน" ซึ่งต้องไม่ถูก
-    ตีความเป็น NEUTRAL สีฟ้า จึงใช้สีเทา #64748B ที่ไม่ซ้ำกับสถานะใดในระบบ
+    result = {key: None for key in _NUMERIC_OUTPUT_KEYS}
+    result.update({key: False for key in _FLAG_OUTPUT_KEYS})
+    result.update({
+        "data_status": NO_DATA_STATUS,
+        "data_status_th": NO_DATA_LABEL_TH,
+        "data_status_reason": reason,
+        "is_evaluated": False,
+        "trend_signal": "N/A",
+        "overall_signal": "N/A",
+        "status_label": NO_DATA_LABEL_TH,
+        "status_color": NO_DATA_COLOR,
+        "action_th": "ยังประเมินจังหวะเข้าซื้อไม่ได้ เนื่องจากข้อมูลไม่เพียงพอ",
+        "readiness": "NO_DATA",
+        "summary_text": f"ข้อมูลไม่เพียงพอสำหรับการประเมินเชิงลึก ({reason})",
+        "rr_status": "NOT_COMPUTABLE",
+        "rr_status_th": "คำนวณไม่ได้",
+        "trend_available_count": 0,
+        "mom_available_count": 0,
+        "trend_criteria_count": (config or DEFAULT_CONFIG).trend_criteria_count,
+        "mom_criteria_count": (config or DEFAULT_CONFIG).momentum_criteria_count,
+        "data_completeness": 0.0,
+        "missing_fields": "[]",
+    })
+    return result
+ 
+ 
+def _check_data_gate(df_price_ticker: Optional[pd.DataFrame],
+                     config: TimingConfig) -> Optional[str]:
+    """Hard Gate: เงื่อนไขที่ทำให้ "ประเมินไม่ได้เลย" (คนละชั้นกับ Issue 02)
+ 
+    คืน None = ผ่าน, คืน str = เหตุผลที่ไม่ผ่าน
     """
+    if df_price_ticker is None or not isinstance(df_price_ticker, pd.DataFrame):
+        return "ไม่ได้รับ DataFrame ราคา"
+    if df_price_ticker.empty:
+        return "DataFrame ราคาว่างเปล่า"
+    if _resolve_column(df_price_ticker, config.close_columns) is None:
+        return "ไม่พบคอลัมน์ราคาปิด (close/Close)"
+    if len(df_price_ticker) < config.min_bars_required:
+        return (f"มีข้อมูลเพียง {len(df_price_ticker)} แท่ง "
+                f"(ต้องการอย่างน้อย {config.min_bars_required} แท่ง)")
+    price = _to_float(df_price_ticker[_resolve_column(
+        df_price_ticker, config.close_columns)].iloc[-1])
+    if price is None or price <= 0:
+        return "ราคาปิดล่าสุดไม่ถูกต้อง (NaN หรือ <= 0)"
+    return None
+ 
+ 
+def classify_signal(total_score: Optional[float],
+                    config: Optional[TimingConfig] = None) -> dict:
+    """แปลงคะแนนเป็นสถานะ  รองรับ total_score = None (ISSUE 01)"""
     cfg = config or DEFAULT_CONFIG
-
+ 
     if total_score is None:
         return dict(
-            signal_legacy="NO_DATA", overall_signal="INSUFFICIENT DATA",
-            status_label="ข้อมูลไม่เพียงพอ", status_color="#64748B",
-            action_th="ระบบยังไม่ได้ประเมินหลักทรัพย์นี้", readiness="NO_DATA",
-            summary_text="ข้อมูลไม่เพียงพอสำหรับการประเมินเชิงลึก "
-                         "(ไม่มีข้อมูล ไม่เท่ากับ ปานกลาง)",
+            signal_legacy="N/A", overall_signal="N/A",
+            status_label=NO_DATA_LABEL_TH, status_color=NO_DATA_COLOR,
+            action_th="ยังประเมินจังหวะเข้าซื้อไม่ได้ เนื่องจากข้อมูลไม่เพียงพอ",
+            readiness="NO_DATA",
+            summary_text="ข้อมูลไม่เพียงพอสำหรับการประเมินเชิงลึก",
         )
-
-    if total_score >= cfg.score_bullish:
+ 
+    if total_score >= cfg.bullish_threshold:
         return dict(
             signal_legacy="BULLISH", overall_signal="BULLISH (Strong Buy)",
             status_label="STRONG BUY", status_color="#10B981",
             action_th="จังหวะซื้อได้เปรียบสูง", readiness="READY",
             summary_text="ราคายืนในโซนสะสมและโครงสร้างขาขึ้นแข็งแกร่ง พร้อมทยอยสะสม",
         )
-    elif total_score >= cfg.score_neutral:
+    elif total_score >= cfg.neutral_threshold:
         return dict(
             signal_legacy="NEUTRAL", overall_signal="NEUTRAL",
             status_label="NEUTRAL", status_color="#38BDF8",
@@ -281,268 +344,387 @@ def classify_signal(total_score, config=None):
             summary_text="แนวโน้มหลักยังเป็นขาลงและโมเมนตัมอ่อนแอ "
                          "หลีกเลี่ยงการเข้าลงทุนจนกว่าจะเกิดสัญญาณกลับตัวชัดเจน",
         )
-
-
-def compute_price_levels(price, df_price_ticker, high_col, low_col, config=None):
-    """คงสูตรเดิมทุกประการ เปลี่ยนเฉพาะหน้าต่างเวลาให้ดึงจาก config ได้
-
-    Invariant ที่ต้องเป็นจริงเสมอ: R2 >= R1 และ S2 <= S1
+ 
+ 
+# =====================================================================
+# ระดับราคา (แนวรับ/แนวต้าน/pivot)  -- ไม่ยัดค่าปลอมเมื่อหาไม่เจอ
+# =====================================================================
+def compute_price_levels(price: Optional[float],
+                         df_price_ticker: pd.DataFrame,
+                         high_col: Optional[str] = None,
+                         low_col: Optional[str] = None,
+                         config: Optional[TimingConfig] = None) -> dict:
+    """คืน dict ของระดับราคา  ค่าที่หาไม่ได้ = None (ไม่ใช่ price * 1.05)
+ 
+    เหตุผล: ค่า price*1.05 ที่เดิมใช้เป็น fallback ทำให้ RR ออกมาเป็นตัวเลข
+    สวย ๆ ทั้งที่ระบบ "ไม่รู้" แนวต้านจริง ซึ่งเป็นรากเดียวกับ Issue 01/03
     """
     cfg = config or DEFAULT_CONFIG
-    recent60 = df_price_ticker.tail(cfg.resistance_window)
-    recent120 = df_price_ticker.tail(cfg.resistance_window_long)
-
-    r1 = float(recent60[high_col].max()) if not recent60.empty else price * 1.05
-    r2 = float(recent120[high_col].max()) if not recent120.empty else r1 * 1.05
-    s1 = float(recent60[low_col].min()) if not recent60.empty else price * 0.95
-    s2 = float(recent120[low_col].min()) if not recent120.empty else s1 * 0.95
-
-    r2 = max(r2, r1)
-    s2 = min(s2, s1)
-
-    # Classic pivot point: prior bar's High/Low + current price (classic pivot
-    # definition) instead of the 60-day rolling high/low, which was not a
-    # standard pivot point.
+    high_col = high_col or _resolve_column(df_price_ticker, cfg.high_columns)
+    low_col = low_col or _resolve_column(df_price_ticker, cfg.low_columns)
+ 
+    levels = {"r1": None, "r2": None, "s1": None, "s2": None,
+              "pivot_point": None, "levels_available": False,
+              "levels_reason": None}
+ 
+    if price is None or price <= 0:
+        levels["levels_reason"] = "ไม่มีราคาอ้างอิง"
+        return levels
+    if high_col is None or low_col is None:
+        levels["levels_reason"] = "ไม่พบคอลัมน์ High/Low"
+        return levels
+ 
+    recent_s = df_price_ticker.tail(cfg.resistance_window_short)
+    recent_l = df_price_ticker.tail(cfg.resistance_window_long)
+ 
+    r1 = _to_float(recent_s[high_col].max())
+    r2 = _to_float(recent_l[high_col].max())
+    s1 = _to_float(recent_s[low_col].min())
+    s2 = _to_float(recent_l[low_col].min())
+ 
+    if r1 is None or s1 is None:
+        levels["levels_reason"] = "High/Low ในกรอบเวลาเป็น NaN ทั้งหมด"
+        return levels
+ 
+    r2 = r1 if r2 is None else max(r2, r1)
+    s2 = s1 if s2 is None else min(s2, s1)
+ 
+    # Classic pivot: High/Low ของแท่งก่อนหน้า + ราคาปิดปัจจุบัน
+    pivot = None
     if len(df_price_ticker) >= 2:
-        prev_bar = df_price_ticker.iloc[-2]
-        prev_high = clean_float(prev_bar.get(high_col), default=price)
-        prev_low = clean_float(prev_bar.get(low_col), default=price)
-    else:
-        prev_high = price
-        prev_low = price
-
-    pivot_point = round((prev_high + prev_low + price) / 3.0, 2)
-    return round(r1, 2), round(r2, 2), round(s1, 2), round(s2, 2), pivot_point
-
-
-def compute_volume_context(df_price_ticker, vol_col, config=None):
-    """ISSUE 04: ฐานค่าเฉลี่ยคือแท่ง -21 ถึง -2 เท่านั้น
-
-    แท่งปัจจุบัน (-1) ถูกกันออกจากการหาค่าเฉลี่ยในอดีตอย่างเด็ดขาด การเปรียบเทียบ
-    จึงเป็น "วันนี้ vs. อดีต" จริง ไม่ใช่ "วันนี้ vs. อดีตที่มีวันนี้ปนอยู่"
-    และจงใจ *ไม่* ใช้คอลัมน์ Volume_Avg20 ที่ pre-compute มา เพราะคอลัมน์นั้นเป็น
-    rolling(20) ที่รวมแท่งปัจจุบันไว้แล้ว
-
-    คืนค่า: (available, ok, vol_last, vol_avg20)
+        prev = df_price_ticker.iloc[-2]
+        ph, pl = _to_float(prev.get(high_col)), _to_float(prev.get(low_col))
+        if ph is not None and pl is not None:
+            pivot = round((ph + pl + price) / 3.0, 2)
+ 
+    levels.update({
+        "r1": round(r1, 2), "r2": round(r2, 2),
+        "s1": round(s1, 2), "s2": round(s2, 2),
+        "pivot_point": pivot, "levels_available": True,
+    })
+    return levels
+ 
+ 
+# =====================================================================
+# ISSUE 03: แยก "คำนวณไม่ได้" ออกจาก "คำนวณได้แต่ไม่คุ้ม"
+# =====================================================================
+def compute_risk_reward(price: Optional[float],
+                        r1: Optional[float],
+                        r2: Optional[float],
+                        s2: Optional[float],
+                        config: Optional[TimingConfig] = None) -> dict:
+    """ประเมิน Risk/Reward โดยแยกผลลัพธ์เป็น 2 สถานะที่ไม่ปนกัน
+ 
+    rr_status = 'NOT_COMPUTABLE'  -> rr_ratio = None  -> UI แสดง "N/A"
+                                     (หาแนวรับไม่เจอ / ตัวหาร <= 0)
+    rr_status = 'COMPUTED'        -> rr_ratio = ค่าจริง เช่น 0.19
+                                     คะแนนมาจากบันได rr_tiers (0.19 -> 0 คะแนน)
     """
     cfg = config or DEFAULT_CONFIG
-    n = cfg.volume_lookback
-
-    if vol_col is None or len(df_price_ticker) < n + 1:
-        return False, False, None, None
-
-    baseline = df_price_ticker[vol_col].iloc[-(n + 1):-1]
-    vol_last_raw = df_price_ticker[vol_col].iloc[-1]
-
-    if baseline.isna().all() or not pd.notna(vol_last_raw):
-        return False, False, None, None
-
-    vol_avg = float(baseline.mean())
-    vol_last = float(vol_last_raw)
-
-    if not np.isfinite(vol_avg) or vol_avg <= 0:
-        return False, False, round(vol_last, 2), None
-
-    return True, bool(vol_last >= vol_avg), round(vol_last, 2), round(vol_avg, 2)
-
-
-def compute_risk_reward(price, r1, r2, s2, config=None):
-    """ISSUE 03 + ISSUE 06: แยก "คำนวณไม่ได้" ออกจาก "คำนวณได้แต่ไม่คุ้ม"
-
-    NOT_COMPUTABLE -> rr_ratio = None      (UI แสดง N/A พร้อมเหตุผล)
-    COMPUTED       -> rr_ratio = ค่าจริง    (เช่น 0.19 แสดงตามจริง แต่ได้ 0 คะแนน)
-    """
-    cfg = config or DEFAULT_CONFIG
-
-    # reward target upgrades to r2 once price has broken above r1, so a
-    # breakout no longer collapses rr_score to 0.
-    reward_target = r2 if price >= r1 else r1
-    downside_risk = price - s2
-    upside_reward = reward_target - price
-
-    if price <= 0:
-        return dict(rr_ratio=None, rr_score=0.0, rr_status='NOT_COMPUTABLE',
-                    rr_status_reason='ราคาปัจจุบันไม่สมบูรณ์',
-                    upside_pct=None, downside_pct=None,
-                    k_rr_ok=False, k_rr_available=False)
-
-    if downside_risk <= 0:
-        return dict(rr_ratio=None, rr_score=0.0, rr_status='NOT_COMPUTABLE',
-                    rr_status_reason='ราคาปัจจุบันอยู่ที่หรือต่ำกว่าแนวรับ 120 วัน '
-                                     'จึงนิยามระยะความเสี่ยงไม่ได้',
-                    upside_pct=None, downside_pct=None,
-                    k_rr_ok=False, k_rr_available=False)
-
-    downside_pct = round((downside_risk / price) * 100, 1)
-    upside_pct = round((max(upside_reward, 0.0) / price) * 100, 1)
-
-    # ISSUE 06: ตัวหารเล็กผิดปกติ -> RR พุ่งสูงเทียม (เคส KCE 18.20 vs S2 18.10 = 90.5 : 1)
-    if cfg.min_downside_pct > 0 and (downside_risk / price) * 100 < cfg.min_downside_pct:
-        return dict(rr_ratio=None, rr_score=0.0, rr_status='NOT_COMPUTABLE',
-                    rr_status_reason=(f'ระยะถึงแนวรับเพียง {downside_pct:.1f}% '
-                                      f'(ต่ำกว่าเกณฑ์ {cfg.min_downside_pct:.1f}%) '
-                                      f'ตัวหารเล็กเกินกว่าจะนิยามความเสี่ยงได้'),
-                    upside_pct=upside_pct, downside_pct=downside_pct,
-                    k_rr_ok=False, k_rr_available=False)
-
-    rr_ratio = round(max(upside_reward, 0.0) / downside_risk, 2)
-
-    if rr_ratio >= cfg.rr_tier_high:
-        rr_score = float(cfg.rr_weight)
-    elif rr_ratio >= cfg.rr_tier_mid:
-        rr_score = round(cfg.rr_weight * 2.0 / 3.0, 1)
-    elif rr_ratio >= cfg.rr_tier_low:
-        rr_score = round(cfg.rr_weight * 1.0 / 3.0, 1)
-    else:
-        rr_score = 0.0
-
-    return dict(rr_ratio=rr_ratio, rr_score=float(rr_score), rr_status='COMPUTED',
-                rr_status_reason='', upside_pct=upside_pct, downside_pct=downside_pct,
-                k_rr_ok=bool(rr_score > 0), k_rr_available=True)
-
-
-def calculate_timing_module(df_price_ticker, config=None):
-    cfg = config or DEFAULT_CONFIG
-
-    # ---- ISSUE 01: Hard Gate ----
-    passed_gate, gate_reason = _check_data_gate(df_price_ticker, cfg)
-    if not passed_gate:
-        return _empty_result(reason=gate_reason, config=cfg)
-
-    latest = df_price_ticker.iloc[-1]
-
-    # ---- ISSUE 02: resolve columns by alias, ไม่อ่านชื่อคอลัมน์ตรง ๆ ----
-    close_col = _resolve_column(df_price_ticker, 'close')
-    high_col = _resolve_column(df_price_ticker, 'high') or close_col
-    low_col = _resolve_column(df_price_ticker, 'low') or close_col
-    vol_col = _resolve_column(df_price_ticker, 'volume')
-
-    price = clean_float(latest.get(close_col), default=0.0)
-
-    ema20_raw = _latest(latest, _resolve_column(df_price_ticker, 'ema20'))
-    ema50_raw = _latest(latest, _resolve_column(df_price_ticker, 'ema50'))
-    rsi_raw = _latest(latest, _resolve_column(df_price_ticker, 'rsi'))
-    macd_raw = _latest(latest, _resolve_column(df_price_ticker, 'macd'))
-    adx_raw = _latest(latest, _resolve_column(df_price_ticker, 'adx'))
-
-    ema20_available = ema20_raw is not None
-    ema50_available = ema50_raw is not None
-    macd_available = macd_raw is not None
-    adx_available = adx_raw is not None
-
-    rsi = clean_float(rsi_raw, default=50.0)
-    macd = clean_float(macd_raw, default=0.0)
-    adx = clean_float(adx_raw, default=0.0)
-    ema20 = clean_float(ema20_raw, default=price)
-    ema50 = clean_float(ema50_raw, default=price)
-
-    r1, r2, s1, s2, pivot_point = compute_price_levels(
-        price, df_price_ticker, high_col, low_col, cfg
-    )
-
-    # --- Risk/Reward pillar (30 pts): ISSUE 03 + ISSUE 06 ---
-    rr = compute_risk_reward(price, r1, r2, s2, cfg)
-    rr_ratio = rr['rr_ratio']
-    rr_score = rr['rr_score']
-    k_rr_ok = rr['k_rr_ok']
-    k_rr_available = rr['k_rr_available']
-    upside_pct = rr['upside_pct']
-    downside_pct = rr['downside_pct']
-
-    # --- Trend pillar (40 pts): k15 short-term, k16 medium-term, k17 long-term ---
-    k15_ok = bool(price > ema20) if ema20_available else False
-    k16_available = ema20_available and ema50_available
-    k16_ok = bool(ema20 > ema50) if k16_available else False
-
-    # k17: real MA200 comparison. Prefer a precomputed MA200 column if the data
-    # pipeline supplies one; otherwise fall back to a rolling 200-bar SMA.
-    ma200_col = _resolve_column(df_price_ticker, 'ma200')
-    if ma200_col is not None and pd.notna(latest.get(ma200_col)):
-        ma200 = clean_float(latest.get(ma200_col), default=price)
-        ma200_available = True
-    elif len(df_price_ticker) >= cfg.ma200_window:
-        ma200 = float(df_price_ticker[close_col].tail(cfg.ma200_window).mean())
-        ma200_available = True
-    else:
-        ma200 = price
-        ma200_available = False
-
-    k17_available = ma200_available
-    k17_ok = bool(price > ma200) if k17_available else False
-
-    trend_avail = [ema20_available, k16_available, k17_available]
-    trend_pass = [k15_ok, k16_ok, k17_ok]
-    n_trend_available = sum(trend_avail)
-
-    # ISSUE 02: ตัวหารตรึงที่ cfg.trend_criteria_count เสมอ
-    # ตัวชี้วัดที่หาย = 0 คะแนน ไม่ใช่ถูกตัดออกจากตัวหาร
-    trend_unit = cfg.trend_weight / float(cfg.trend_criteria_count)
-    trend_score = round(sum(1 for p, a in zip(trend_pass, trend_avail) if a and p) * trend_unit, 1)
-
-    # --- Momentum pillar (30 pts): k18 MACD, k19 ADX, k20 Volume ---
-    k18_ok = bool(macd > 0) if macd_available else False
-    k19_ok = bool(adx >= cfg.adx_threshold) if adx_available else False
-
-    k20_available, k20_ok, vol_last, vol_avg20 = compute_volume_context(
-        df_price_ticker, vol_col, cfg
-    )
-
-    mom_avail = [macd_available, adx_available, k20_available]
-    mom_pass = [k18_ok, k19_ok, k20_ok]
-    n_mom_available = sum(mom_avail)
-
-    mom_unit = cfg.momentum_weight / float(cfg.momentum_criteria_count)
-    mom_score = round(sum(1 for p, a in zip(mom_pass, mom_avail) if a and p) * mom_unit, 1)
-
-    # --- ISSUE 01: Soft Gate ---
-    availability = [
-        ('EMA20', ema20_available), ('EMA50', k16_available), ('MA200', k17_available),
-        ('MACD', macd_available), ('ADX', adx_available), ('Volume', k20_available),
-        ('Risk/Reward', k_rr_available),
-    ]
-    n_available = sum(1 for _, a in availability if a)
-    missing_fields = [name for name, a in availability if not a]
-    data_completeness = round(n_available / float(cfg.total_criteria_count), 2)
-
-    if data_completeness < cfg.min_data_completeness:
-        reason = (f"ตัวชี้วัดพร้อมใช้ {n_available}/{cfg.total_criteria_count} "
-                  f"(ต่ำกว่าเกณฑ์ {int(cfg.min_data_completeness * 100)}%) "
-                  f"ขาด: {', '.join(missing_fields)}")
-        return _empty_result(reason=reason, missing_fields=missing_fields, config=cfg)
-
-    total_score = round(float(np.clip(trend_score + mom_score + rr_score, 0, 100)))
-    sig = classify_signal(total_score, config=cfg)
-
-    return {
-        'timing_score': float(total_score), 'rsi': round(rsi, 1), 'macd': round(macd, 3),
-        'adx': round(adx, 1), 'ema20': round(ema20, 2), 'ema50': round(ema50, 2),
-        'ma200': round(ma200, 2),
-        'trend_signal': sig['signal_legacy'], 'resistance_60d': r1, 'support_60d': s1,
-        'pivot_point': pivot_point, 'resistance_2': r2, 'support_2': s2,
-        'overall_signal': sig['overall_signal'], 'status_label': sig['status_label'],
-        'status_color': sig['status_color'], 'action_th': sig['action_th'],
-        'rr_ratio': rr_ratio, 'trend_score': trend_score, 'mom_score': mom_score,
-        'rr_score': rr_score,
-        'upside_pct': upside_pct, 'downside_pct': downside_pct,
-        'readiness': sig['readiness'],
-        'summary_text': sig['summary_text'],
-        'k15_ok': k15_ok, 'k16_ok': k16_ok, 'k17_ok': k17_ok,
-        'k18_ok': k18_ok, 'k19_ok': k19_ok, 'k20_ok': k20_ok, 'k_rr_ok': k_rr_ok,
-        'k15_available': ema20_available, 'k16_available': k16_available,
-        'k17_available': k17_available, 'k18_available': macd_available,
-        'k19_available': adx_available, 'k20_available': k20_available,
-        'k_rr_available': k_rr_available,
-        'trend_available_count': n_trend_available, 'mom_available_count': n_mom_available,
-        'trend_criteria_count': cfg.trend_criteria_count,
-        'mom_criteria_count': cfg.momentum_criteria_count,
-        'total_criteria_count': cfg.total_criteria_count,
-        'rr_status': rr['rr_status'], 'rr_status_reason': rr['rr_status_reason'],
-        'vol_last': vol_last, 'vol_avg20': vol_avg20,
-        'data_completeness': data_completeness,
-        'data_status': 'OK',
-        'data_status_reason': '',
-        'is_evaluated': True,
-        'missing_fields': json.dumps(missing_fields, ensure_ascii=False),
-        'algo_version': ALGO_VERSION,
-        'config_snapshot': cfg.as_json(),
+    out = {
+        "rr_ratio": None, "rr_score": 0.0, "rr_status": "NOT_COMPUTABLE",
+        "rr_status_th": "คำนวณไม่ได้", "rr_reason": None,
+        "upside_pct": None, "downside_pct": None,
+        "reward_target": None, "risk_floor": None,
+        "k_rr_ok": False, "k_rr_available": False,
     }
+ 
+    if price is None or price <= 0:
+        out["rr_reason"] = "ไม่มีราคาอ้างอิง"
+        return out
+    if r1 is None or s2 is None:
+        out["rr_reason"] = "หาแนวรับ/แนวต้านอ้างอิงไม่ได้"
+        return out
+ 
+    reward_target = r2 if (price >= r1 and r2 is not None) else r1
+    downside_risk = price - s2
+ 
+    if downside_risk <= 0:
+        # ราคาปัจจุบันอยู่ที่หรือต่ำกว่าแนวรับระยะยาว -> ตัวหาร <= 0
+        out["rr_reason"] = "ราคาหลุดแนวรับอ้างอิงแล้ว (ตัวหาร <= 0) จึงนิยามความเสี่ยงไม่ได้"
+        return out
+ 
+    downside_pct = (downside_risk / price) * 100.0
+    if cfg.min_downside_pct > 0 and downside_pct < cfg.min_downside_pct:
+        # ตัวหารเล็กผิดปกติ: ราคาเกาะแนวรับพอดี -> RR พองตัวเทียม
+        out["rr_reason"] = (
+            f"ระยะถึงแนวรับเพียง {downside_pct:.2f}% (ต่ำกว่าเกณฑ์ "
+            f"{cfg.min_downside_pct:.2f}%) ตัวหารเล็กเกินกว่าจะนิยามความเสี่ยงได้"
+        )
+        out["downside_pct"] = round(downside_pct, 1)
+        return out
+ 
+    upside_reward = reward_target - price
+    rr_ratio = round(max(upside_reward, 0.0) / downside_risk, 2)
+ 
+    rr_score = 0.0
+    for threshold, points in cfg.rr_tiers:
+        if rr_ratio >= threshold:
+            rr_score = float(points)
+            break
+ 
+    out.update({
+        "rr_ratio": rr_ratio,
+        "rr_score": rr_score,
+        "rr_status": "COMPUTED",
+        "rr_status_th": "คำนวณได้",
+        "upside_pct": round((upside_reward / price) * 100, 1),
+        "downside_pct": round((downside_risk / price) * 100, 1),
+        "reward_target": round(reward_target, 2),
+        "risk_floor": round(s2, 2),
+        "k_rr_ok": rr_score > 0,
+        "k_rr_available": True,
+    })
+    if upside_reward <= 0:
+        out["rr_reason"] = "ราคาเลยเป้าหมายอ้างอิงแล้ว อัพไซด์คงเหลือ = 0"
+    return out
+ 
+ 
+# =====================================================================
+# ISSUE 04: ฐานค่าเฉลี่ยวอลุ่มต้องไม่รวมแท่งปัจจุบัน
+# =====================================================================
+def compute_volume_context(df_price_ticker: pd.DataFrame,
+                           config: Optional[TimingConfig] = None) -> dict:
+    """เปรียบเทียบวอลุ่มวันนี้ (แท่ง -1) กับฐานอดีต (แท่ง -21 ถึง -2)
+ 
+    เดิมใช้ tail(20) ซึ่งรวมแท่ง -1 เข้าไปในฐานด้วย ทำให้ฐานถูกดึงเข้าหา
+    ค่าปัจจุบัน 1/20 ส่วน วันที่วอลุ่มพุ่งแรงจึงถูก "เฉลี่ยลดทอน" ตัวเอง
+    """
+    cfg = config or DEFAULT_CONFIG
+    out = {"volume_last": None, "volume_avg": None, "volume_ratio": None,
+           "volume_base_window": None,
+           "k20_available": False, "k20_ok": False, "volume_reason": None}
+ 
+    vol_col = _resolve_column(df_price_ticker, cfg.volume_columns)
+    if vol_col is None:
+        out["volume_reason"] = "ไม่พบคอลัมน์ Volume"
+        return out
+ 
+    vol_last = _to_float(df_price_ticker[vol_col].iloc[-1])
+    if vol_last is None:
+        out["volume_reason"] = "วอลุ่มแท่งล่าสุดเป็น NaN"
+        return out
+    out["volume_last"] = vol_last
+ 
+    n = cfg.volume_lookback
+    vol_avg = None
+ 
+    if cfg.use_precomputed_volume_avg:
+        # ถ้าจะใช้คอลัมน์ที่ pre-compute มา ต้องอ่านค่าของแท่ง -2 (เทียบเท่า shift(1))
+        # เพราะคอลัมน์ Volume_Avg20 ในชุดข้อมูลเป็น rolling(20) ที่รวมแท่งปัจจุบัน
+        avg_col = _resolve_column(df_price_ticker, cfg.volume_avg_column_candidates)
+        if avg_col is not None and len(df_price_ticker) >= 2:
+            vol_avg = _to_float(df_price_ticker[avg_col].iloc[-2])
+            out["volume_base_window"] = f"{avg_col} @ bar -2 (shift 1)"
+ 
+    if vol_avg is None:
+        need = n + 1 if cfg.volume_exclude_current_bar else n
+        if len(df_price_ticker) < need:
+            out["volume_reason"] = f"ต้องการอย่างน้อย {need} แท่งเพื่อสร้างฐานค่าเฉลี่ย"
+            return out
+        if cfg.volume_exclude_current_bar:
+            base = df_price_ticker[vol_col].iloc[-(n + 1):-1]   # แท่ง -21 ถึง -2
+            out["volume_base_window"] = f"bars -{n + 1} .. -2"
+        else:
+            base = df_price_ticker[vol_col].iloc[-n:]
+            out["volume_base_window"] = f"bars -{n} .. -1"
+        vol_avg = _to_float(base.mean())
+ 
+    if vol_avg is None or vol_avg <= 0:
+        out["volume_reason"] = "ฐานค่าเฉลี่ยวอลุ่มเป็น NaN หรือ <= 0"
+        return out
+ 
+    ratio = vol_last / vol_avg
+    out.update({
+        "volume_avg": round(vol_avg, 2),
+        "volume_ratio": round(ratio, 3),
+        "k20_available": True,
+        "k20_ok": bool(ratio >= cfg.volume_ratio_threshold),
+    })
+    return out
+ 
+ 
+# =====================================================================
+# ISSUE 02: ตัวหารตรึง -- ตัวชี้วัดหาย = 0 คะแนน ไม่ใช่ลดตัวหาร
+# =====================================================================
+def _score_pillar(passes: Sequence[bool],
+                  availables: Sequence[bool],
+                  weight: float,
+                  criteria_count: int) -> float:
+    """คะแนนเสา = (จำนวนเกณฑ์ที่ผ่าน) x (น้ำหนักเสา / ตัวหารคงที่)
+ 
+    ตัวหารมาจาก config เสมอ ไม่ได้มาจาก sum(availables)
+    เกณฑ์ที่ข้อมูลหาย -> pass = False -> ได้ 0 คะแนน แต่ยังนับอยู่ในตัวหาร
+    ผลคือหุ้นข้อมูลแหว่งจะ "เสียเปรียบ" ตามความจริง ไม่ใช่ได้เปรียบเหมือนเดิม
+    """
+    if criteria_count <= 0:
+        return 0.0
+    if len(passes) != criteria_count:
+        raise ValueError(
+            f"จำนวนเกณฑ์ ({len(passes)}) ไม่ตรงกับตัวหารที่ตั้งไว้ ({criteria_count})"
+        )
+    passed = sum(1 for p, a in zip(passes, availables) if bool(p) and bool(a))
+    return round(passed * (weight / criteria_count), 1)
+ 
+ 
+# =====================================================================
+# ฟังก์ชันหลัก
+# =====================================================================
+def calculate_timing_module(df_price_ticker: Optional[pd.DataFrame],
+                            config: Optional[TimingConfig] = None,
+                            **overrides) -> dict:
+    """ประเมินจังหวะเข้าซื้อ (Module 3)
+ 
+    config   : TimingConfig  -- ใช้สำหรับ backtest / parameter optimization
+    overrides: ทางลัดสำหรับ override ทีละค่า เช่น adx_trend_threshold=20
+    """
+    cfg = config or DEFAULT_CONFIG
+    if overrides:
+        cfg = cfg.tuned(**overrides)
+ 
+    # ---------- ISSUE 01: Hard Gate ----------
+    gate_reason = _check_data_gate(df_price_ticker, cfg)
+    if gate_reason is not None:
+        return _empty_result(gate_reason, cfg)
+ 
+    close_col = _resolve_column(df_price_ticker, cfg.close_columns)
+    high_col = _resolve_column(df_price_ticker, cfg.high_columns)
+    low_col = _resolve_column(df_price_ticker, cfg.low_columns)
+    price = _to_float(df_price_ticker[close_col].iloc[-1])
+ 
+    # ---------- อ่านตัวชี้วัด (None = หาย ไม่ใช่ค่า default) ----------
+    ema20, _ = _latest_value(df_price_ticker, cfg.ema20_columns)
+    ema50, _ = _latest_value(df_price_ticker, cfg.ema50_columns)
+    rsi, _ = _latest_value(df_price_ticker, cfg.rsi_columns)
+    macd, _ = _latest_value(df_price_ticker, cfg.macd_columns)
+    adx, adx_col = _latest_value(df_price_ticker, cfg.adx_columns)
+ 
+    # ---------- MA200 ----------
+    ma200, ma200_col = _latest_value(df_price_ticker, cfg.ma200_columns)
+    if ma200 is None and len(df_price_ticker) >= cfg.ma_long_period:
+        ma200 = _to_float(df_price_ticker[close_col].tail(cfg.ma_long_period).mean())
+ 
+    # ---------- เสา Trend (ตัวหารตรึง 3) ----------
+    k15_available = ema20 is not None
+    k16_available = (ema20 is not None) and (ema50 is not None)
+    k17_available = ma200 is not None
+ 
+    k15_ok = bool(price > ema20) if k15_available else False
+    k16_ok = bool(ema20 > ema50) if k16_available else False
+    k17_ok = bool(price > ma200) if k17_available else False
+ 
+    trend_pass = [k15_ok, k16_ok, k17_ok]
+    trend_avail = [k15_available, k16_available, k17_available]
+    trend_score = _score_pillar(trend_pass, trend_avail,
+                                cfg.trend_weight, cfg.trend_criteria_count)
+ 
+    # ---------- เสา Momentum (ตัวหารตรึง 3) ----------
+    vol_ctx = compute_volume_context(df_price_ticker, cfg)
+ 
+    k18_available = macd is not None
+    k19_available = adx is not None
+    k20_available = vol_ctx["k20_available"]
+ 
+    k18_ok = bool(macd > cfg.macd_bull_threshold) if k18_available else False
+    k19_ok = bool(adx >= cfg.adx_trend_threshold) if k19_available else False
+    k20_ok = vol_ctx["k20_ok"]
+ 
+    mom_pass = [k18_ok, k19_ok, k20_ok]
+    mom_avail = [k18_available, k19_available, k20_available]
+    mom_score = _score_pillar(mom_pass, mom_avail,
+                              cfg.momentum_weight, cfg.momentum_criteria_count)
+ 
+    # ---------- ระดับราคา + เสา Risk/Reward ----------
+    levels = compute_price_levels(price, df_price_ticker, high_col, low_col, cfg)
+    rr = compute_risk_reward(price, levels["r1"], levels["r2"], levels["s2"], cfg)
+ 
+    # ---------- ISSUE 01 (ชั้นที่ 2): Soft Gate ด้วย data completeness ----------
+    available_flags = trend_avail + mom_avail + [rr["k_rr_available"]]
+    total_criteria = cfg.trend_criteria_count + cfg.momentum_criteria_count + 1
+    available_count = sum(1 for a in available_flags if a)
+    data_completeness = round(available_count / float(total_criteria), 2)
+ 
+    python
+    # --- แปลงตัวแปรให้อยู่ในรูป String เพื่อให้ SQLite บันทึกได้โดยตรง ---
+    missing_fields_str = ", ".join(missing_fields) if missing_fields else ""
+    config_snapshot_str = json.dumps(cfg.as_dict(), ensure_ascii=False, default=str)
+ 
+    if data_completeness < cfg.min_data_completeness:
+        result = _empty_result(
+            f"ตัวชี้วัดพร้อมใช้เพียง {available_count}/{total_criteria} "
+            f"({data_completeness:.0%}) ต่ำกว่าเกณฑ์ขั้นต่ำ {cfg.min_data_completeness:.0%}",
+            cfg,
+        )
+        result["missing_fields"] = missing_fields
+        result["data_completeness"] = data_completeness
+        return result
+ 
+    # ---------- รวมคะแนน ----------
+    total_score = float(np.clip(trend_score + mom_score + rr["rr_score"], 0, 100))
+    total_score = round(total_score)
+    sig = classify_signal(total_score, cfg)
+ 
+    return {
+        # --- สถานะข้อมูล (ISSUE 01) ---
+        "data_status": "OK",
+        "data_status_th": "ข้อมูลเพียงพอ",
+        "data_status_reason": None,
+        "is_evaluated": True,
+        "data_completeness": data_completeness,
+        "missing_fields": missing_fields,
+ 
+        # --- คะแนน ---
+        "timing_score": float(total_score),
+        "trend_score": trend_score,
+        "mom_score": mom_score,
+        "rr_score": rr["rr_score"],
+ 
+        # --- ตัวชี้วัดดิบ (None = ไม่มีจริง ไม่ใช่ค่า default) ---
+        "rsi": _round(rsi, 1), "macd": _round(macd, 3), "adx": _round(adx, 1),
+        "ema20": _round(ema20), "ema50": _round(ema50), "ma200": _round(ma200),
+        "adx_source_column": adx_col, "ma200_source_column": ma200_col,
+ 
+        # --- ระดับราคา ---
+        "resistance_60d": levels["r1"], "resistance_2": levels["r2"],
+        "support_60d": levels["s1"], "support_2": levels["s2"],
+        "pivot_point": levels["pivot_point"],
+        "levels_available": levels["levels_available"],
+ 
+        # --- Risk/Reward (ISSUE 03) ---
+        "rr_ratio": rr["rr_ratio"], "rr_status": rr["rr_status"],
+        "rr_status_th": rr["rr_status_th"], "rr_reason": rr["rr_reason"],
+        "upside_pct": rr["upside_pct"], "downside_pct": rr["downside_pct"],
+        "reward_target": rr["reward_target"], "risk_floor": rr["risk_floor"],
+ 
+        # --- วอลุ่ม (ISSUE 04) ---
+        "volume_last": vol_ctx["volume_last"], "volume_avg": vol_ctx["volume_avg"],
+        "volume_ratio": vol_ctx["volume_ratio"],
+        "volume_base_window": vol_ctx["volume_base_window"],
+ 
+        # --- สถานะเชิงข้อความ ---
+        "trend_signal": sig["signal_legacy"], "overall_signal": sig["overall_signal"],
+        "status_label": sig["status_label"], "status_color": sig["status_color"],
+        "action_th": sig["action_th"], "readiness": sig["readiness"],
+        "summary_text": sig["summary_text"],
+ 
+        # --- เช็กลิสต์ ---
+        "k15_ok": k15_ok, "k16_ok": k16_ok, "k17_ok": k17_ok,
+        "k18_ok": k18_ok, "k19_ok": k19_ok, "k20_ok": k20_ok,
+        "k_rr_ok": rr["k_rr_ok"],
+        "k15_available": k15_available, "k16_available": k16_available,
+        "k17_available": k17_available, "k18_available": k18_available,
+        "k19_available": k19_available, "k20_available": k20_available,
+        "k_rr_available": rr["k_rr_available"],
+ 
+        # --- ISSUE 02: ประกาศตัวหารออกมาให้ UI ใช้ ห้าม UI คำนวณเอง ---
+        "trend_criteria_count": cfg.trend_criteria_count,
+        "mom_criteria_count": cfg.momentum_criteria_count,
+        "trend_weight": cfg.trend_weight, "mom_weight": cfg.momentum_weight,
+        "rr_weight": cfg.rr_weight,
+        "trend_available_count": sum(1 for a in trend_avail if a),
+        "mom_available_count": sum(1 for a in mom_avail if a),
+ 
+        # --- เผยเกณฑ์ที่ใช้จริง เพื่อ audit trail (ISSUE 05) ---
+        "config_snapshot": config_snapshot_str,
+    }
+ 

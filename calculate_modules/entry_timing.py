@@ -644,7 +644,6 @@ def calculate_timing_module(df_price_ticker: Optional[pd.DataFrame],
     available_count = sum(1 for a in available_flags if a)
     data_completeness = round(available_count / float(total_criteria), 2)
  
-    python
     # --- แปลงตัวแปรให้อยู่ในรูป String เพื่อให้ SQLite บันทึกได้โดยตรง ---
     missing_fields_str = ", ".join(missing_fields) if missing_fields else ""
     config_snapshot_str = json.dumps(cfg.as_dict(), ensure_ascii=False, default=str)

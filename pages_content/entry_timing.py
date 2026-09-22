@@ -3,27 +3,7 @@
 pages_content/entry_timing.py
 --------------------------------------------------------------------
 Institutional Grade UI - Bloomberg / TradingView Inspired
-IKB v3.2 (Audit Response Build)
-ยึดหน้าตาและโครงสร้างเดิมของ v3.1 ทั้งหมด: design tokens ชุดเดิม, ลำดับการ์ด
-เดิม (Header bar -> KPI 4 ช่อง -> left/center/right -> bottom 2 ช่อง -> footer),
-สัดส่วนคอลัมน์เดิม [1.0, 2.3, 1.15], ความสูงกราฟเดิม 525
-การเปลี่ยนแปลงคือการรองรับสถานะใหม่จาก backend v2.0 เท่านั้น
-Changelog vs v3.1:
-- ISSUE 01: เพิ่มเส้นทางเรนเดอร์ "ข้อมูลไม่เพียงพอ" (`_render_insufficient`)
-  เมื่อ backend ส่ง data_status = 'INSUFFICIENT_DATA' หรือ timing_score = None
-  ฟังก์ชัน render() จะ return ออกตั้งแต่ต้น องค์ประกอบที่ต้องการตัวเลข
-  (เกจครึ่งวงกลม, แถบ %, f-string) จึงไม่ถูกเรียกเลย ไม่เกิด TypeError
-  ใช้สีเทา #64748B ที่ไม่ซ้ำกับสถานะใดในระบบ และไม่ใช้ค่า default 50.0 อีก
-- ISSUE 02: `pillar_pts_label()` หารด้วยจำนวนเกณฑ์ "คงที่"
-  (trend_criteria_count / mom_criteria_count จาก backend) ไม่ใช่จำนวนที่มีข้อมูล
-  เกณฑ์ที่ไม่มีข้อมูลแสดง badge = N/A แต่แต้มแสดง 0.0 pts ให้ตรงกับคะแนนจริง
-- ISSUE 03: แถว Risk/Reward และการ์ด RISK / REWARD แยกแสดง 2 กรณี
-  rr_status = 'NOT_COMPUTABLE' -> N/A พร้อมเหตุผล
-  rr_status = 'COMPUTED'       -> แสดงอัตราส่วนจริงแม้จะต่ำ เช่น 0.19 : 1
-- ถอดข้อความ narrative ที่ hardcode ในการ์ด RISK / REWARD
-  ("Potential upside is significantly higher...") มาสร้างจากค่าที่คำนวณจริง
-- แก้ระดับการย่อหน้าของบล็อก `with right:` ให้เป็นคอลัมน์พี่น้องของ
-  `with center:` ตามที่ตั้งใจไว้ (ผลลัพธ์บนหน้าจอเหมือนเดิมทุกประการ)
+IKB v3.3 (Audit Response Build - Standalone Fallback & Clean Run)
 """
 import html
 import json
@@ -35,7 +15,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 from common import safe, render_nav_footer
-from calculate_modules.entry_timing import classify_signal
+from calculate_modules.entry_timing import calculate_timing_module, classify_signal
+
 # --------------------------------------------------------------------
 # Design tokens
 # --------------------------------------------------------------------
@@ -52,13 +33,15 @@ ACCENT = "#38BDF8"
 GREEN = "#10B981"
 RED = "#EF4444"
 AMBER = "#F59E0B"
-GRAY = "#64748B"          # ISSUE 01: สีเฉพาะของสถานะ "ยังไม่ได้ประเมิน"
+GRAY = "#64748B"
+
 def _badge(ok, available):
     if not available:
         return "N/A", TEXT_MUTED, "148,163,184"
     if ok:
         return "PASS", GREEN, "16,185,129"
     return "FAIL", RED, "239,68,68"
+
 def _card_style(extra=""):
     return (
         f"background:{BG_CARD};"
@@ -67,10 +50,12 @@ def _card_style(extra=""):
         "padding:16px;"
         f"{extra}"
     )
+
 def _render_html(markup):
     clean = textwrap.dedent(markup)
     clean = re.sub(r"\s*\n\s*", " ", clean).strip()
     st.markdown(clean, unsafe_allow_html=True)
+
 def _metric_card(label, value, sub="", value_color=TEXT_WHITE, is_summary=False):
     content_style = (
         "font-size:11px;font-weight:700;color:#E2E8F0;margin-top:4px;"
@@ -89,8 +74,8 @@ def _metric_card(label, value, sub="", value_color=TEXT_WHITE, is_summary=False)
         </div>
     </div>
     """
+
 def _num(value):
-    """ISSUE 01: None ต้องคงเป็น None ห้ามถูกกลบเป็น 0.0 / 50.0 โดยอัตโนมัติ"""
     if value is None:
         return None
     try:
@@ -98,28 +83,26 @@ def _num(value):
     except (TypeError, ValueError):
         return None
     return None if (np.isnan(out) or np.isinf(out)) else out
+
 def _f(value, spec=".2f", dash="N/A"):
-    """ISSUE 01 (hardening): format ตัวเลขโดยไม่ระเบิดเมื่อค่าเป็น None
-    ต่างจาก safe(value, default) ของ v3.1 ตรงที่ไม่เคยแทน None ด้วยตัวเลข
-    แต่คืนข้อความ "N/A" แทน จึงไม่มีทางเกิด
-    TypeError: unsupported format string passed to NoneType.__format__
-    ไม่ว่าคีย์ใดจาก backend จะหล่นหายระหว่างทางก็ตาม
-    """
     if value is None:
         return dash
     try:
         return format(float(value), spec)
     except (TypeError, ValueError):
         return dash
+
 def _missing_list(raw):
-    """backend ส่ง missing_fields มาเป็น JSON string (SQLite compatibility)"""
     if isinstance(raw, (list, tuple)):
         return list(raw)
+    if isinstance(raw, str) and "," in raw:
+        return [x.strip() for x in raw.split(",") if x.strip()]
     try:
         parsed = json.loads(raw) if raw else []
         return parsed if isinstance(parsed, list) else []
     except (TypeError, ValueError):
         return []
+
 def _render_header_bar(ticker_safe, sector_label, c_p, price_chg_pct, pe_ratio, roe_pct, data_as_of):
     chg_color = GREEN if (price_chg_pct or 0.0) >= 0 else RED
     chg_arrow = "▲" if (price_chg_pct or 0.0) >= 0 else "▼"
@@ -159,11 +142,8 @@ def _render_header_bar(ticker_safe, sector_label, c_p, price_chg_pct, pe_ratio, 
         </div>
         """
     )
+
 def _render_insufficient(sig, reason, missing_fields):
-    """ISSUE 01: หน้าจอสถานะ "ยังไม่ได้ประเมิน"
-    ใช้โครงการ์ดเดียวกับหน้าปกติ (grid 4 ช่อง + การ์ดใหญ่) เพื่อให้หน้าตาต่อเนื่อง
-    แต่ไม่มีการเรนเดอร์เกจ คะแนน หรือแถบเปอร์เซ็นต์ใด ๆ ทั้งสิ้น
-    """
     missing_html = (
         "".join(
             f'<span style="background:{BG_CHIP};color:{TEXT_MUTED};font-size:10px;font-weight:700;'
@@ -206,8 +186,18 @@ def _render_insufficient(sig, reason, missing_fields):
         </div>
         """
     )
+
 def render(ctx):
     info = ctx.stock_info
+    
+    # ------------------------------------------------------------------
+    # Standalone Fallback: คำนวณสดทันทีหากค่าในฐานข้อมูลกลางยังไม่ถูกอัปเดตเป็น v2.2
+    # ------------------------------------------------------------------
+    if info.get("timing_score") is None or "rr_status" not in info or info.get("rr_status") is None:
+        if hasattr(ctx, "stock_daily") and ctx.stock_daily is not None and not ctx.stock_daily.empty:
+            fresh_calc = calculate_timing_module(ctx.stock_daily)
+            info.update(fresh_calc)
+
     c_p = _num(ctx.current_price)
     ticker_safe = html.escape(str(ctx.selected_ticker))
     sector_label = str(safe(info.get("sector_label"), ""))
@@ -217,61 +207,56 @@ def render(ctx):
     roe_pct = safe(info.get("roe_pct"), None)
     total_score = _num(info.get("timing_score"))
     data_status = str(info.get("data_status", "OK"))
-    # Single source of truth: classify_signal() lives in the backend module.
-    # Do not re-derive status_label/status_color/action_th/readiness here —
-    # that duplication is what caused the UI and backend to drift apart before.
-    sig = classify_signal(total_score)
-    # ---- ISSUE 01: ข้อมูลไม่พอ -> ออกจาก render() ตั้งแต่ต้น ----
+
+    trend_veto_applied = bool(info.get("trend_veto_applied", 0))
+    sig = classify_signal(total_score, trend_veto=trend_veto_applied)
+
     if total_score is None or data_status == "INSUFFICIENT_DATA":
         _render_header_bar(ticker_safe, sector_label, c_p, price_chg_pct, pe_ratio, roe_pct, data_as_of)
         reason = str(info.get("data_status_reason") or info.get("summary_text") or sig["summary_text"])
         _render_insufficient(sig, reason, _missing_list(info.get("missing_fields")))
         render_nav_footer("m3", prev_page=" ⚖️ Fair Value", next_page=" 🔮 AI Prediction")
         return
+
     status_label = sig["status_label"]
     status_color = sig["status_color"]
     action_th = sig["action_th"]
     readiness = sig["readiness"]
+
     adx_val = _num(info.get("adx")) or 0.0
-    r1 = _num(info.get("resistance_60d")) or c_p * 1.05
+    r1 = _num(info.get("resistance_60d")) or (c_p * 1.05 if c_p else 0.0)
     r2 = _num(info.get("resistance_2")) or r1 * 1.05
-    s1 = _num(info.get("support_60d")) or c_p * 0.95
+    s1 = _num(info.get("support_60d")) or (c_p * 0.95 if c_p else 0.0)
     s2 = _num(info.get("support_2")) or s1 * 0.95
-    pp = _num(info.get("pivot_point")) or round((r1 + s1 + c_p) / 3, 2)
-    k15_ok = bool(info.get("k15_ok", False))
-    k16_ok = bool(info.get("k16_ok", False))
-    k17_ok = bool(info.get("k17_ok", False))
-    k18_ok = bool(info.get("k18_ok", False))
-    k19_ok = bool(info.get("k19_ok", False))
-    k20_ok = bool(info.get("k20_ok", False))
-    k_rr_ok = bool(info.get("k_rr_ok", False))
-    k15_av = bool(info.get("k15_available", False))
-    k16_av = bool(info.get("k16_available", False))
-    k17_av = bool(info.get("k17_available", False))
-    k18_av = bool(info.get("k18_available", False))
-    k19_av = bool(info.get("k19_available", False))
-    k20_av = bool(info.get("k20_available", False))
-    k_rr_av = bool(info.get("k_rr_available", False))
-    # ISSUE 02: ตัวหารต้องเป็นจำนวนเกณฑ์ "ทั้งหมด" ของเสานั้น (คงที่ 3/3)
-    # ไม่ใช่จำนวนเกณฑ์ที่มีข้อมูล มิฉะนั้นหุ้นข้อมูลแหว่งจะได้แต้มต่อหัวสูงกว่า
+    pp = _num(info.get("pivot_point")) or round((r1 + s1 + (c_p or 0.0)) / 3, 2)
+
+    k15_ok = bool(info.get("k15_ok", 0))
+    k16_ok = bool(info.get("k16_ok", 0))
+    k17_ok = bool(info.get("k17_ok", 0))
+    k18_ok = bool(info.get("k18_ok", 0))
+    k19_ok = bool(info.get("k19_ok", 0))
+    k20_ok = bool(info.get("k20_ok", 0))
+    k_rr_ok = bool(info.get("k_rr_ok", 0))
+
+    k15_av = bool(info.get("k15_available", 0))
+    k16_av = bool(info.get("k16_available", 0))
+    k17_av = bool(info.get("k17_available", 0))
+    k18_av = bool(info.get("k18_available", 0))
+    k19_av = bool(info.get("k19_available", 0))
+    k20_av = bool(info.get("k20_available", 0))
+    k_rr_av = bool(info.get("k_rr_available", 0))
+
     trend_criteria_count = int(safe(info.get("trend_criteria_count"), 3)) or 3
     mom_criteria_count = int(safe(info.get("mom_criteria_count"), 3)) or 3
     rr_ratio = _num(info.get("rr_ratio"))
     rr_score = _num(info.get("rr_score")) or 0.0
     rr_status = str(info.get("rr_status", "COMPUTED"))
-    rr_status_reason = str(info.get("rr_status_reason", ""))
-    # ISSUE 03 (hardening): ห้ามเชื่อธงสถานะเพียงอย่างเดียว เพราะถ้าคีย์ rr_status
-    # หล่นหายระหว่างทาง (backend เวอร์ชันเก่า หรือ schema ของ cis_database.db
-    # ไม่มีคอลัมน์นี้) ค่า default "COMPUTED" จะพาโค้ดไป format rr_ratio ที่เป็น
-    # None แล้วเกิด TypeError ทั้งหน้าจอ — ให้ "ค่าที่จะแสดง" เป็นคนตัดสินแทน
+    rr_status_reason = str(info.get("rr_status_reason", "") or info.get("rr_reason", ""))
+
     rr_computable = (rr_status != "NOT_COMPUTABLE") and (rr_ratio is not None)
     if not rr_computable and not rr_status_reason:
-        rr_status_reason = (
-            "ไม่พบค่าอัตราส่วนจาก backend (ตรวจสอบว่าใช้ entry_timing.py v2.0 "
-            "และตาราง cis_database.db มีคอลัมน์ rr_status / rr_status_reason)"
-            if rr_status != "NOT_COMPUTABLE"
-            else "ไม่สามารถนิยามอัตราส่วนผลตอบแทนต่อความเสี่ยงได้"
-        )
+        rr_status_reason = "ไม่สามารถนิยามอัตราส่วนผลตอบแทนต่อความเสี่ยงได้"
+
     downside_pct = _num(info.get("downside_pct"))
     upside_pct = _num(info.get("upside_pct"))
     vol_series = next(
@@ -282,22 +267,20 @@ def render(ctx):
         ),
         None,
     )
+
     def pillar_pts_label(ok, available, n_criteria, pillar_max):
-        # ตัวชี้วัดที่ไม่มีข้อมูลได้ 0 คะแนนจริง ๆ (ISSUE 02) จึงแสดง 0.0 pts
-        # ส่วนการบอกว่า "ไม่มีข้อมูล" เป็นหน้าที่ของ badge N/A ไม่ใช่ช่องแต้ม
         if not available or not ok:
             return "0.0 pts"
         share = pillar_max / n_criteria if n_criteria > 0 else 0.0
         return f"+{share:.1f} pts"
-    # ISSUE 03: ข้อความของแถว Risk/Reward แยก 2 กรณีชัดเจน
+
     if not rr_computable:
         rr_sub_text = f"คำนวณไม่ได้ — {rr_status_reason}"
     elif k_rr_ok:
         rr_sub_text = f"RR {_f(rr_ratio)} : 1 ผ่านเกณฑ์ขั้นต่ำ"
     else:
         rr_sub_text = f"RR {_f(rr_ratio)} : 1 ต่ำกว่าเกณฑ์ขั้นต่ำ"
-    # 7 items total: 3 Trend + 3 Momentum + 1 Risk/Reward, matching the
-    # 40/30/30 pillar weighting used by the scoring backend.
+
     checklist = [
         (k15_ok, k15_av, "Short-Term Trend",
          "ราคายืนเหนือเส้น EMA20" if k15_ok else ("ราคาต่ำกว่าเส้น EMA20" if k15_av else "ไม่มีข้อมูล EMA20"),
@@ -321,10 +304,12 @@ def render(ctx):
          rr_sub_text,
          f"+{_f(rr_score, '.1f')} pts" if k_rr_ok else "0.0 pts"),
     ]
+
     bullish_count = sum(1 for ok, av, *_ in checklist if ok and av)
     total_checks = len(checklist)
     failed_items = [name for ok, av, name, _, _ in checklist if not ok and av]
     na_items = [name for ok, av, name, _, _ in checklist if not av]
+
     if bullish_count >= total_checks - 1:
         summary_text = f"สัญญาณพร้อมสูง ({bullish_count}/{total_checks}) โครงสร้างราคาและโมเมนตัมสนับสนุนการเข้าสะสม"
     elif len(failed_items) + len(na_items) <= 2:
@@ -332,8 +317,9 @@ def render(ctx):
         summary_text = f"ผ่าน {bullish_count}/{total_checks} เกณฑ์ --- <b>รอการยืนยันจาก: {missing_str}</b>"
     else:
         summary_text = f"ผ่าน {bullish_count}/{total_checks} เกณฑ์ --- <b>สัญญาณยังไม่ครบถ้วน ควรงดเข้าซื้อ</b>"
-    # --- TOP HEADER BAR ---
+
     _render_header_bar(ticker_safe, sector_label, c_p, price_chg_pct, pe_ratio, roe_pct, data_as_of)
+
     readiness_color = GREEN if readiness == "READY" else AMBER
     confidence_dots = "".join([
         f'<span style="height:7px; width:7px; background-color:{"#10B981" if i < bullish_count else "#334155"}; '
@@ -353,7 +339,7 @@ def render(ctx):
     </div>
     """
     _render_html(kpi_html)
-    # ปรับสัดส่วนคอลัมน์ให้สมมาตรและพอดีกับจอภาพแบบ Institutional Grade
+
     left, center, right = st.columns([1.0, 2.3, 1.15], gap="medium")
     with left:
         total_arc = 125.66
@@ -417,6 +403,7 @@ def render(ctx):
             </div>
             """
         )
+
     with center:
         c_head1, c_head2 = st.columns([1, 1.5])
         with c_head1:
@@ -482,7 +469,7 @@ def render(ctx):
             ]
             for val, dash_type, col_hex, w in lines_to_plot:
                 fig_main.add_hline(y=val, line_dash=dash_type, line_color=col_hex, line_width=w)
-            # ขยายความสูงของกราฟให้เติมเต็มพื้นที่ฝั่งขวาพอดี (height=525)
+            
             fig_main.update_layout(
                 height=525, margin=dict(l=8, r=40, t=25, b=5),
                 paper_bgcolor=BG_CARD, plot_bgcolor=BG_CARD,
@@ -493,7 +480,8 @@ def render(ctx):
                 legend=dict(orientation="h", y=1.12, x=0.01, font=dict(size=10, color=TEXT_WHITE), bgcolor="rgba(0,0,0,0)"),
                 xaxis_rangeslider_visible=False, hovermode="x unified",
             )
-            st.plotly_chart(fig_main, use_container_width=True, config={"displayModeBar": True, "displaylogo": False})
+            st.plotly_chart(fig_main, width="stretch", config={"displayModeBar": True, "displaylogo": False})
+
     with right:
         _render_html(
             f"""
@@ -542,13 +530,10 @@ def render(ctx):
             </div>
             """
         )
-    # ==============================================================
-    # BOTTOM SECTION
-    # ==============================================================
+
     st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
     b_c1, b_c2 = st.columns([1.0, 1.5], gap="medium")
     with b_c1:
-        # ISSUE 03: NOT_COMPUTABLE ต้องไม่ถูกแสดงเป็น "0.00 : 1" ปนกับค่าที่คำนวณได้จริง
         if not rr_computable:
             rr_color = GRAY
             rr_headline = "N/A"

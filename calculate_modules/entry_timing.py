@@ -2,7 +2,11 @@
 """
 calculate_modules/entry_timing.py
 --------------------------------------------------------------------
-Institutional Quantitative Framework (IKB v2.1) - Audit Response Build
+Institutional Quantitative Framework (IKB v2.2) - Production Database Compatible Build
+Changelog vs v2.1:
+- FIX: ปรับรูปแบบคืนค่าทั้งหมดเป็น Primitive/Scalar types (int, float, str)
+  เพื่อรองรับ SQLite schema ใน calculate_scores.py โดยไม่ต้องแก้ไขโค้ดฐานข้อมูลกลาง
+- MAINTAIN: ตรรกะ Issue 01-05 และ Trend Veto ยังคงทำงานครบถ้วนตามเดิม
 """
 
 from __future__ import annotations
@@ -10,7 +14,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from dataclasses import dataclass, field, replace, asdict
+from dataclasses import dataclass, replace, asdict
 from typing import Optional, Sequence, Tuple
 
 import numpy as np
@@ -194,12 +198,12 @@ _FLAG_OUTPUT_KEYS = (
 def _empty_result(reason: str = "ไม่พบข้อมูลราคาสำหรับหลักทรัพย์นี้",
                   config: Optional[TimingConfig] = None) -> dict:
     result = {key: None for key in _NUMERIC_OUTPUT_KEYS}
-    result.update({key: False for key in _FLAG_OUTPUT_KEYS})
+    result.update({key: 0 for key in _FLAG_OUTPUT_KEYS})
     result.update({
         "data_status": NO_DATA_STATUS,
         "data_status_th": NO_DATA_LABEL_TH,
         "data_status_reason": reason,
-        "is_evaluated": False,
+        "is_evaluated": 0,
         "trend_signal": "N/A",
         "overall_signal": "N/A",
         "status_label": NO_DATA_LABEL_TH,
@@ -209,14 +213,16 @@ def _empty_result(reason: str = "ไม่พบข้อมูลราคา�
         "summary_text": f"ข้อมูลไม่เพียงพอสำหรับการประเมินเชิงลึก ({reason})",
         "rr_status": "NOT_COMPUTABLE",
         "rr_status_th": "คำนวณไม่ได้",
-        "trend_veto_applied": False,
-        "trend_veto_reason": None,
+        "rr_reason": reason,
+        "trend_veto_applied": 0,
+        "trend_veto_reason": "",
         "trend_available_count": 0,
         "mom_available_count": 0,
-        "trend_criteria_count": (config or DEFAULT_CONFIG).trend_criteria_count,
-        "mom_criteria_count": (config or DEFAULT_CONFIG).momentum_criteria_count,
+        "trend_criteria_count": int((config or DEFAULT_CONFIG).trend_criteria_count),
+        "mom_criteria_count": int((config or DEFAULT_CONFIG).momentum_criteria_count),
         "data_completeness": 0.0,
         "missing_fields": "",
+        "config_snapshot": "",
     })
     return result
 
@@ -302,7 +308,7 @@ def compute_price_levels(price: Optional[float],
 
     levels = {"r1": None, "r2": None, "s1": None, "s2": None,
               "pivot_point": None, "levels_available": False,
-              "levels_reason": None}
+              "levels_reason": ""}
 
     if price is None or price <= 0:
         levels["levels_reason"] = "ไม่มีราคาอ้างอิง"
@@ -349,7 +355,7 @@ def compute_risk_reward(price: Optional[float],
     cfg = config or DEFAULT_CONFIG
     out = {
         "rr_ratio": None, "rr_score": 0.0, "rr_status": "NOT_COMPUTABLE",
-        "rr_status_th": "คำนวณไม่ได้", "rr_reason": None,
+        "rr_status_th": "คำนวณไม่ได้", "rr_reason": "",
         "upside_pct": None, "downside_pct": None,
         "reward_target": None, "risk_floor": None,
         "k_rr_ok": False, "k_rr_available": False,
@@ -408,8 +414,8 @@ def compute_volume_context(df_price_ticker: pd.DataFrame,
                            config: Optional[TimingConfig] = None) -> dict:
     cfg = config or DEFAULT_CONFIG
     out = {"volume_last": None, "volume_avg": None, "volume_ratio": None,
-           "volume_base_window": None,
-           "k20_available": False, "k20_ok": False, "volume_reason": None}
+           "volume_base_window": "",
+           "k20_available": False, "k20_ok": False, "volume_reason": ""}
 
     vol_col = _resolve_column(df_price_ticker, cfg.volume_columns)
     if vol_col is None:
@@ -572,56 +578,78 @@ def calculate_timing_module(df_price_ticker: Optional[pd.DataFrame],
     return {
         "data_status": "OK",
         "data_status_th": "ข้อมูลเพียงพอ",
-        "data_status_reason": None,
-        "is_evaluated": True,
-        "data_completeness": data_completeness,
-        "missing_fields": missing_fields_str,
+        "data_status_reason": "",
+        "is_evaluated": 1,
+        "data_completeness": float(data_completeness),
+        "missing_fields": str(missing_fields_str),
 
         "timing_score": float(total_score),
-        "trend_score": trend_score,
-        "mom_score": mom_score,
-        "rr_score": rr["rr_score"],
+        "trend_score": float(trend_score),
+        "mom_score": float(mom_score),
+        "rr_score": float(rr["rr_score"]),
 
-        "rsi": _round(rsi, 1), "macd": _round(macd, 3), "adx": _round(adx, 1),
-        "ema20": _round(ema20), "ema50": _round(ema50), "ma200": _round(ma200),
-        "adx_source_column": adx_col, "ma200_source_column": ma200_col,
+        "rsi": _round(rsi, 1),
+        "macd": _round(macd, 3),
+        "adx": _round(adx, 1),
+        "ema20": _round(ema20),
+        "ema50": _round(ema50),
+        "ma200": _round(ma200),
+        "adx_source_column": str(adx_col or ""),
+        "ma200_source_column": str(ma200_col or ""),
 
-        "resistance_60d": levels["r1"], "resistance_2": levels["r2"],
-        "support_60d": levels["s1"], "support_2": levels["s2"],
-        "pivot_point": levels["pivot_point"],
-        "levels_available": levels["levels_available"],
+        "resistance_60d": _round(levels["r1"]),
+        "resistance_2": _round(levels["r2"]),
+        "support_60d": _round(levels["s1"]),
+        "support_2": _round(levels["s2"]),
+        "pivot_point": _round(levels["pivot_point"]),
+        "levels_available": 1 if levels["levels_available"] else 0,
 
-        "rr_ratio": rr["rr_ratio"], "rr_status": rr["rr_status"],
-        "rr_status_th": rr["rr_status_th"], "rr_reason": rr["rr_reason"],
-        "upside_pct": rr["upside_pct"], "downside_pct": rr["downside_pct"],
-        "reward_target": rr["reward_target"], "risk_floor": rr["risk_floor"],
+        "rr_ratio": _round(rr["rr_ratio"]),
+        "rr_status": str(rr["rr_status"]),
+        "rr_status_th": str(rr["rr_status_th"]),
+        "rr_reason": str(rr["rr_reason"] or ""),
+        "upside_pct": _round(rr["upside_pct"], 1),
+        "downside_pct": _round(rr["downside_pct"], 1),
+        "reward_target": _round(rr["reward_target"]),
+        "risk_floor": _round(rr["risk_floor"]),
 
-        "volume_last": vol_ctx["volume_last"], "volume_avg": vol_ctx["volume_avg"],
-        "volume_ratio": vol_ctx["volume_ratio"],
-        "volume_base_window": vol_ctx["volume_base_window"],
+        "volume_last": _round(vol_ctx["volume_last"]),
+        "volume_avg": _round(vol_ctx["volume_avg"]),
+        "volume_ratio": _round(vol_ctx["volume_ratio"], 3),
+        "volume_base_window": str(vol_ctx["volume_base_window"] or ""),
 
-        "trend_signal": sig["signal_legacy"], "overall_signal": sig["overall_signal"],
-        "status_label": sig["status_label"], "status_color": sig["status_color"],
-        "action_th": sig["action_th"], "readiness": sig["readiness"],
-        "summary_text": sig["summary_text"],
-        "trend_veto_applied": sig["trend_veto_applied"],
-        "trend_veto_reason": ("ราคาต่ำกว่า MA200 (KO-15 Downtrend) — บังคับ BEARISH ตาม KO-21"
-                              if sig["trend_veto_applied"] else None),
+        "trend_signal": str(sig["signal_legacy"]),
+        "overall_signal": str(sig["overall_signal"]),
+        "status_label": str(sig["status_label"]),
+        "status_color": str(sig["status_color"]),
+        "action_th": str(sig["action_th"]),
+        "readiness": str(sig["readiness"]),
+        "summary_text": str(sig["summary_text"]),
+        "trend_veto_applied": 1 if sig["trend_veto_applied"] else 0,
+        "trend_veto_reason": "ราคาต่ำกว่า MA200 (KO-15 Downtrend) — บังคับ BEARISH ตาม KO-21" if sig["trend_veto_applied"] else "",
 
-        "k15_ok": k15_ok, "k16_ok": k16_ok, "k17_ok": k17_ok,
-        "k18_ok": k18_ok, "k19_ok": k19_ok, "k20_ok": k20_ok,
-        "k_rr_ok": rr["k_rr_ok"],
-        "k15_available": k15_available, "k16_available": k16_available,
-        "k17_available": k17_available, "k18_available": k18_available,
-        "k19_available": k19_available, "k20_available": k20_available,
-        "k_rr_available": rr["k_rr_available"],
+        "k15_ok": 1 if k15_ok else 0,
+        "k16_ok": 1 if k16_ok else 0,
+        "k17_ok": 1 if k17_ok else 0,
+        "k18_ok": 1 if k18_ok else 0,
+        "k19_ok": 1 if k19_ok else 0,
+        "k20_ok": 1 if k20_ok else 0,
+        "k_rr_ok": 1 if rr["k_rr_ok"] else 0,
+        "k15_available": 1 if k15_available else 0,
+        "k16_available": 1 if k16_available else 0,
+        "k17_available": 1 if k17_available else 0,
+        "k18_available": 1 if k18_available else 0,
+        "k19_available": 1 if k19_available else 0,
+        "k20_available": 1 if k20_available else 0,
+        "k_rr_available": 1 if rr["k_rr_available"] else 0,
 
-        "trend_criteria_count": cfg.trend_criteria_count,
-        "mom_criteria_count": cfg.momentum_criteria_count,
-        "trend_weight": cfg.trend_weight, "mom_weight": cfg.momentum_weight,
-        "rr_weight": cfg.rr_weight,
-        "trend_available_count": sum(1 for a in trend_avail if a),
-        "mom_available_count": sum(1 for a in mom_avail if a),
+        "trend_criteria_count": int(cfg.trend_criteria_count),
+        "mom_criteria_count": int(cfg.momentum_criteria_count),
+        "trend_weight": float(cfg.trend_weight),
+        "mom_weight": float(cfg.momentum_weight),
+        "rr_weight": float(cfg.rr_weight),
+        "trend_available_count": int(sum(1 for a in trend_avail if a)),
+        "mom_available_count": int(sum(1 for a in mom_avail if a)),
 
-        "config_snapshot": config_snapshot_str,
+        "config_snapshot": str(config_snapshot_str),
     }
